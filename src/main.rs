@@ -32,8 +32,7 @@ enum Commands {
     Server {
         paths: Vec<PathBuf>,
         #[clap(long, short)]
-        /// Optional port
-        /// Defaults to 4433
+        /// Optional port, efaults to 4433.
         port: Option<u16>,
     },
     /// Fetch some data
@@ -41,12 +40,10 @@ enum Commands {
     Client {
         hash: bao::Hash,
         #[clap(long, short)]
-        /// Option address of the server
-        /// Defaults to 127.0.0.1:4433
+        /// Option address of the server, defaults to 127.0.0.1:4433.
         addr: Option<SocketAddr>,
         #[clap(long, short)]
-        /// Option path to save the file
-        /// Defaults to using the hash as the name
+        /// Option path to save the file, defaults to using the hash as the name.
         out: Option<PathBuf>,
     },
 }
