@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
-    io::{Read, Write},
+    io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use bytes::{Bytes, BytesMut};
 use clap::{Parser, Subcommand};
 use libp2p_core::identity::ed25519::Keypair;
@@ -91,11 +91,7 @@ pub struct ClientOptions {
     pub out: Option<PathBuf>,
 }
 
-async fn main_client(hash: bao::Hash) -> Result<()> {
-    main_client_with_options(hash, Default::default()).await
-}
-
-async fn main_client_with_options(hash: bao::Hash, opts: ClientOptions) -> Result<()> {
+async fn main_client(hash: bao::Hash, opts: ClientOptions) -> Result<()> {
     let keypair = libp2p_core::identity::Keypair::Ed25519(Keypair::generate());
 
     let client_config = libp2p_tls::make_client_config(&keypair, None)?;
@@ -150,9 +146,12 @@ async fn main_client_with_options(hash: bao::Hash, opts: ClientOptions) -> Resul
             Res::Found { size, outboard } => {
                 // Need to read the message now
                 println!("size is {}", size);
-                if size > MAX_DATA_SIZE {
-                    bail!("size too large: {} > {}", size, MAX_DATA_SIZE);
-                }
+                ensure!(
+                    size <= MAX_DATA_SIZE,
+                    "size too large: {} > {}",
+                    size,
+                    MAX_DATA_SIZE
+                );
 
                 let outboard = outboard.to_vec();
 
@@ -194,7 +193,7 @@ async fn main_client_with_options(hash: bao::Hash, opts: ClientOptions) -> Resul
                     // default to name as hash
                     std::path::PathBuf::from(hash.to_string())
                 };
-                std::fs::write(outpath, in_buffer)?;
+                tokio::fs::write(outpath, in_buffer).await?;
                 // print stats
                 let data_len = size;
                 let elapsed = now.elapsed().as_millis();
@@ -233,14 +232,7 @@ pub struct ServerOptions {
     pub port: Option<u16>,
 }
 
-async fn main_server(db: Arc<HashMap<bao::Hash, Data>>) -> Result<()> {
-    main_server_with_options(db, Default::default()).await
-}
-
-async fn main_server_with_options(
-    db: Arc<HashMap<bao::Hash, Data>>,
-    opts: ServerOptions,
-) -> Result<()> {
+async fn main_server(db: Arc<HashMap<bao::Hash, Data>>, opts: ServerOptions) -> Result<()> {
     let keypair = libp2p_core::identity::Keypair::Ed25519(Keypair::generate());
     let server_config = libp2p_tls::make_server_config(&keypair)?;
     let tls = s2n_quic::provider::tls::rustls::Server::from(server_config);
@@ -340,15 +332,13 @@ struct Data {
     data: Bytes,
 }
 
-fn create_db(paths: Vec<&Path>) -> Arc<HashMap<bao::Hash, Data>> {
+async fn create_db(paths: Vec<&Path>) -> Result<Arc<HashMap<bao::Hash, Data>>> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
     for path in paths {
-        if !path.is_file() {
-            panic!("can only transfer blob data");
-        }
-        let data = std::fs::read(path).unwrap();
+        ensure!(path.is_file(), "can only transfer blob data");
+        let data = tokio::fs::read(path).await?;
         let num = data.len();
         let (outboard, hash) = bao::encode::outboard(&data);
 
@@ -362,7 +352,7 @@ fn create_db(paths: Vec<&Path>) -> Arc<HashMap<bao::Hash, Data>> {
         );
     }
 
-    Arc::new(db)
+    Ok(Arc::new(db))
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -373,12 +363,12 @@ async fn main() -> Result<()> {
         Commands::Client { hash, addr, out } => {
             println!("Requesting: {}", hash.to_hex());
             let opts = ClientOptions { addr, out };
-            main_client_with_options(hash, opts).await?
+            main_client(hash, opts).await?
         }
         Commands::Server { paths, port } => {
-            let db = create_db(paths.iter().map(|p| p.as_path()).collect());
+            let db = create_db(paths.iter().map(|p| p.as_path()).collect()).await?;
             let opts = ServerOptions { port };
-            main_server_with_options(db, opts).await?
+            main_server(db, opts).await?
         }
     }
 
@@ -391,22 +381,24 @@ mod tests {
     use testdir::testdir;
 
     #[tokio::test]
-    async fn basics() {
+    async fn basics() -> Result<()> {
         let dir: PathBuf = testdir!();
         let path = dir.join("hello_world");
-        std::fs::write(&path, "hello world!").ok();
-        let db = create_db(vec![&path]);
+        tokio::fs::write(&path, "hello world!").await?;
+        let db = create_db(vec![&path]).await?;
         let hash = *db.iter().next().unwrap().0;
         tokio::task::spawn(async move {
-            main_server(db).await.unwrap();
+            main_server(db, Default::default()).await.unwrap();
         });
 
         let out = dir.join("out");
         let mut opts = ClientOptions::default();
         opts.out = Some(out.clone());
-        main_client_with_options(hash, opts).await.unwrap();
-        let got = std::fs::read(out).ok();
-        let expect = std::fs::read(path).ok();
+        main_client(hash, opts).await?;
+        let got = tokio::fs::read(out).await?;
+        let expect = tokio::fs::read(path).await?;
         assert_eq!(expect, got);
+
+        Ok(())
     }
 }
