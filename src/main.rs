@@ -1,13 +1,55 @@
-use std::{collections::HashMap, env, io::Read, net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    io::{Read, Write},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Bytes, BytesMut};
+use clap::{Parser, Subcommand};
 use libp2p_core::identity::ed25519::Keypair;
 use s2n_quic::{client::Connect, Client, Server};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const MAX_DATA_SIZE: usize = 1024 * 1024 * 1024;
+
+#[derive(Parser, Debug, Clone)]
+#[clap(version, about, long_about = None)]
+#[clap(about = "Send data.")]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Commands {
+    /// Serve the data from the given path
+    #[clap(about = "Serve the data from the given path")]
+    Server {
+        paths: Vec<PathBuf>,
+        #[clap(long, short)]
+        /// Optional port
+        /// Defaults to 4433
+        port: Option<u16>,
+    },
+    /// Fetch some data
+    #[clap(about = "Fetch the data from the hash")]
+    Client {
+        hash: bao::Hash,
+        #[clap(long, short)]
+        /// Option address of the server
+        /// Defaults to 127.0.0.1:4433
+        addr: Option<SocketAddr>,
+        #[clap(long, short)]
+        /// Option path to save the file
+        /// Defaults to using the hash as the name
+        out: Option<PathBuf>,
+    },
+}
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 struct Request {
@@ -43,8 +85,19 @@ impl Res<'_> {
     }
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct ClientOptions {
+    pub addr: Option<SocketAddr>,
+    pub out: Option<PathBuf>,
+}
+
 async fn main_client(hash: bao::Hash) -> Result<()> {
+    main_client_with_options(hash, Default::default()).await
+}
+
+async fn main_client_with_options(hash: bao::Hash, opts: ClientOptions) -> Result<()> {
     let keypair = libp2p_core::identity::Keypair::Ed25519(Keypair::generate());
+
     let client_config = libp2p_tls::make_client_config(&keypair, None)?;
     let tls = s2n_quic::provider::tls::rustls::Client::from(client_config);
 
@@ -54,7 +107,11 @@ async fn main_client(hash: bao::Hash) -> Result<()> {
         .start()
         .map_err(|e| anyhow!("{:?}", e))?;
 
-    let addr: SocketAddr = "127.0.0.1:4433".parse()?;
+    let addr = if let Some(addr) = opts.addr {
+        addr
+    } else {
+        "127.0.0.1:4433".parse().unwrap()
+    };
     let connect = Connect::new(addr).with_server_name("localhost");
     let mut connection = client.connect(connect).await?;
 
@@ -92,6 +149,7 @@ async fn main_client(hash: bao::Hash) -> Result<()> {
         match response.data {
             Res::Found { size, outboard } => {
                 // Need to read the message now
+                println!("size is {}", size);
                 if size > MAX_DATA_SIZE {
                     bail!("size too large: {} > {}", size, MAX_DATA_SIZE);
                 }
@@ -130,6 +188,13 @@ async fn main_client(hash: bao::Hash) -> Result<()> {
                     while decoder.read(&mut buf)? > 0 {}
                 }
 
+                let outpath = if let Some(out) = opts.out {
+                    out
+                } else {
+                    // default to name as hash
+                    std::path::PathBuf::from(hash.to_string())
+                };
+                std::fs::write(outpath, in_buffer)?;
                 // print stats
                 let data_len = size;
                 let elapsed = now.elapsed().as_millis();
@@ -163,17 +228,37 @@ async fn write_lp<W: AsyncWrite + Unpin>(writer: &mut W, data: &[u8]) -> Result<
     Ok(())
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ServerOptions {
+    pub port: Option<u16>,
+}
+
 async fn main_server(db: Arc<HashMap<bao::Hash, Data>>) -> Result<()> {
+    main_server_with_options(db, Default::default()).await
+}
+
+async fn main_server_with_options(
+    db: Arc<HashMap<bao::Hash, Data>>,
+    opts: ServerOptions,
+) -> Result<()> {
     let keypair = libp2p_core::identity::Keypair::Ed25519(Keypair::generate());
     let server_config = libp2p_tls::make_server_config(&keypair)?;
     let tls = s2n_quic::provider::tls::rustls::Server::from(server_config);
     let limits = s2n_quic::provider::limits::Default::default();
+    let port = if let Some(port) = opts.port {
+        port
+    } else {
+        4433
+    };
+    let addr = format!("127.0.0.1:{port}");
     let mut server = Server::builder()
         .with_tls(tls)?
-        .with_io("127.0.0.1:4433")?
+        .with_io(addr.as_str())?
         .with_limits(limits)?
         .start()
         .map_err(|e| anyhow!("{:?}", e))?;
+
+    println!("\nlistening at: {:#?}", server.local_addr().unwrap());
 
     while let Some(mut connection) = server.accept().await {
         let db = db.clone();
@@ -255,12 +340,16 @@ struct Data {
     data: Bytes,
 }
 
-fn create_db(range: Vec<usize>) -> Arc<HashMap<bao::Hash, Data>> {
+fn create_db(paths: Vec<&Path>) -> Arc<HashMap<bao::Hash, Data>> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
-    for num in range {
-        let data = vec![1u8; 1024 * 1024 * num];
+    for path in paths {
+        if !path.is_file() {
+            panic!("can only transfer blob data");
+        }
+        let data = std::fs::read(path).unwrap();
+        let num = data.len();
         let (outboard, hash) = bao::encode::outboard(&data);
 
         println!("- {}: {}MiB", hash.to_hex(), num);
@@ -278,23 +367,19 @@ fn create_db(range: Vec<usize>) -> Arc<HashMap<bao::Hash, Data>> {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        bail!("invalid arguments");
-    }
+    let cli = Cli::parse();
 
-    match args[1].as_str() {
-        "client" => {
-            let hash = &args[2];
-            let hash = bao::Hash::from_hex(hash)?;
+    match cli.command {
+        Commands::Client { hash, addr, out } => {
             println!("Requesting: {}", hash.to_hex());
-            main_client(hash).await?
+            let opts = ClientOptions { addr, out };
+            main_client_with_options(hash, opts).await?
         }
-        "server" => {
-            let db = create_db(vec![1, 10, 100]);
-            main_server(db).await?
+        Commands::Server { paths, port } => {
+            let db = create_db(paths.iter().map(|p| p.as_path()).collect());
+            let opts = ServerOptions { port };
+            main_server_with_options(db, opts).await?
         }
-        _ => bail!("unknown argument: {}", &args[0]),
     }
 
     Ok(())
@@ -303,15 +388,25 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use testdir::testdir;
 
     #[tokio::test]
     async fn basics() {
-        let db = create_db(vec![1]);
+        let dir: PathBuf = testdir!();
+        let path = dir.join("hello_world");
+        std::fs::write(&path, "hello world!").ok();
+        let db = create_db(vec![&path]);
         let hash = *db.iter().next().unwrap().0;
         tokio::task::spawn(async move {
             main_server(db).await.unwrap();
         });
 
-        main_client(hash).await.unwrap();
+        let out = dir.join("out");
+        let mut opts = ClientOptions::default();
+        opts.out = Some(out.clone());
+        main_client_with_options(hash, opts).await.unwrap();
+        let got = std::fs::read(out).ok();
+        let expect = std::fs::read(path).ok();
+        assert_eq!(expect, got);
     }
 }
