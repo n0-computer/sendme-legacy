@@ -111,7 +111,6 @@ pub async fn run<D: AsyncWrite + Unpin>(
                     );
 
                     {
-                        // Ignore the output, not needed
                         let mut buf = [0u8; 1024];
                         loop {
                             // TODO: avoid blocking
@@ -122,7 +121,9 @@ pub async fn run<D: AsyncWrite + Unpin>(
                             dest.write_all(&buf[..read]).await?;
                         }
                     }
-                    dest.shutdown().await?;
+
+                    // Shut down the stream
+                    writer.close().await?;
 
                     let data_len = size;
                     let elapsed = now.elapsed();
