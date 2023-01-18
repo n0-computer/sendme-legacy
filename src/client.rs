@@ -1,13 +1,14 @@
 use std::time::Duration;
-use std::{io::Read, net::SocketAddr, time::Instant};
+use std::{net::SocketAddr, time::Instant};
 
 use anyhow::{anyhow, Result};
 use bytes::BytesMut;
-use futures::Stream;
+use futures::{AsyncReadExt, Stream};
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio_util::compat::*;
 use tracing::debug;
 
 use crate::protocol::{read_lp_data, write_lp, Handshake, Request, Res, Response};
@@ -120,35 +121,17 @@ pub fn run<D: AsyncWrite + Unpin>(
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
 
-                            // TODO: avoid buffering
-
-                            // remove response buffered data
-                            while in_buffer.len() < size {
-                                reader.read_buf(&mut in_buffer).await?;
-                            }
-
-                            debug!("client: received data: {}bytes", in_buffer.len());
-                            if size != in_buffer.len() {
-                                Err(anyhow!("expected {} bytes, got {} bytes", size, in_buffer.len()))?;
-                            }
-                            let mut decoder = bao::decode::Decoder::new_outboard(
-                                std::io::Cursor::new(&in_buffer[..]),
+                            let concat_reader = in_buffer.chain(
+                                reader.take((size - in_buffer.len()) as u64)
+                            );
+                            let mut decoder = bao::decode_fut::Decoder::new_outboard(
+                                concat_reader,
                                 outboard,
                                 &hash,
-                            );
+                            ).compat();
 
-                            {
-                                let mut buf = [0u8; 1024];
-                                loop {
-                                    // TODO: avoid blocking
-                                    let read = decoder.read(&mut buf)?;
-                                    if read == 0 {
-                                        break;
-                                    }
-                                    dest.write_all(&buf[..read]).await?;
-                                }
-                                dest.flush().await?;
-                            }
+                            tokio::io::copy(&mut decoder, &mut dest).await?;
+                            dest.flush().await?;
 
                             // Shut down the stream
                             debug!("shutting down stream");

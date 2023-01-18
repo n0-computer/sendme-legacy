@@ -130,12 +130,12 @@ dependencies = [
 [[package]]
 name = "bao"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3663af8a469bf3a2d818b8c1a7b62e4dc55c4547b4c14f5dab35fc9e707bef83"
 dependencies = [
  "arrayref",
  "arrayvec",
  "blake3",
+ "bytes",
+ "futures",
 ]
 
 [[package]]
@@ -1731,6 +1731,7 @@ checksum = "0bb2e075f03b3d66d8d8785356224ba688d2906a371015e225beeb65ca92c740"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "pin-project-lite",
  "tokio",

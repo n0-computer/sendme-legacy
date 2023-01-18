@@ -18,7 +18,9 @@ mod tests {
     async fn basics() -> Result<()> {
         let dir: PathBuf = testdir!();
         let path = dir.join("hello_world");
-        tokio::fs::write(&path, "hello world!").await?;
+        let content = vec![1u8; 1024 * 1024 * 10];
+
+        tokio::fs::write(&path, &content).await?;
         let db = server::create_db(vec![&path]).await?;
         let hash = *db.iter().next().unwrap().0;
         let addr = "127.0.0.1:4443".parse().unwrap();
