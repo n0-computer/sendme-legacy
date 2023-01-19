@@ -11,28 +11,30 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
 use crate::protocol::{read_lp_data, write_lp, Handshake, Request, Res, Response};
-use crate::tls::{self, Keypair};
+use crate::tls::{self, Keypair, PeerId};
 
 const MAX_DATA_SIZE: usize = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Options {
     pub addr: SocketAddr,
+    pub peer_id: Option<PeerId>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
             addr: "127.0.0.1:4433".parse().unwrap(),
+            peer_id: None,
         }
     }
 }
 
 /// Setup a QUIC connection to the provided server address
-async fn setup(server_addr: SocketAddr) -> Result<(Client, Connection)> {
+async fn setup(server_addr: SocketAddr, peer_id: Option<PeerId>) -> Result<(Client, Connection)> {
     let keypair = Keypair::generate();
 
-    let client_config = tls::make_client_config(&keypair, None)?;
+    let client_config = tls::make_client_config(&keypair, peer_id)?;
     let tls = s2n_quic::provider::tls::rustls::Client::from(client_config);
 
     let client = Client::builder()
@@ -69,7 +71,7 @@ pub fn run<D: AsyncWrite + Unpin>(
 ) -> impl Stream<Item = Result<Event>> {
     async_stream::try_stream! {
         let now = Instant::now();
-        let (_client, mut connection) = setup(opts.addr).await?;
+        let (_client, mut connection) = setup(opts.addr, opts.peer_id).await?;
 
         let stream = connection.open_bidirectional_stream().await?;
         let (mut reader, mut writer) = stream.split();
