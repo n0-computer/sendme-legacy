@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::path::PathBuf;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail, ensure, Result};
 use bytes::{Bytes, BytesMut};
 use s2n_quic::stream::BidirectionalStream;
 use s2n_quic::Server;
-use tokio::io::AsyncWriteExt;
-use tracing::{debug, error};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tracing::{debug, warn};
 
 use crate::protocol::{read_lp, write_lp, Handshake, Request, Res, Response, VERSION};
 use crate::tls::{self, Keypair};
@@ -55,7 +56,7 @@ pub async fn run(db: Arc<HashMap<bao::Hash, Data>>, opts: Options) -> Result<()>
                 let db = db.clone();
                 tokio::spawn(async move {
                     if let Err(err) = handle_stream(db, stream).await {
-                        error!("error: {:#?}", err);
+                        warn!("error: {:#?}", err);
                     }
                     debug!("disconnected");
                 });
@@ -97,40 +98,53 @@ async fn handle_stream(
                 let name = bao::Hash::from(request.name);
                 debug!("got request({}): {}", request.id, name.to_hex());
 
-                let (data, piece) = if let Some(data) = db.get(&name) {
-                    debug!("found {}", name.to_hex());
-                    (
-                        Res::Found {
-                            size: data.data.len(),
-                            outboard: &data.outboard,
-                        },
-                        Some(data.clone()),
-                    )
-                } else {
-                    debug!("not found {}", name.to_hex());
-                    (Res::NotFound, None)
-                };
+                match db.get(&name) {
+                    Some(piece) => {
+                        debug!("found {}", name.to_hex());
+                        match piece {
+                            Data::File {
+                                outboard,
+                                path,
+                                size,
+                            } => {
+                                write_response(
+                                    &mut writer,
+                                    &mut out_buffer,
+                                    request.id,
+                                    Res::Found {
+                                        size: *size,
+                                        outboard,
+                                    },
+                                )
+                                .await?;
 
-                let response = Response {
-                    id: request.id,
-                    data,
-                };
-
-                if out_buffer.len() < 20 + response.data.len() {
-                    out_buffer.resize(20 + response.data.len(), 0u8);
+                                debug!("writing data");
+                                let file = tokio::fs::File::open(&path).await?;
+                                let mut reader = tokio::io::BufReader::new(file);
+                                tokio::io::copy(&mut reader, &mut writer).await?;
+                            }
+                            Data::Stdin { outboard, data } => {
+                                let size = data.len();
+                                write_response(
+                                    &mut writer,
+                                    &mut out_buffer,
+                                    request.id,
+                                    Res::Found { size, outboard },
+                                )
+                                .await?;
+                                debug!("writing data");
+                                writer.write_all(data).await?;
+                            }
+                        }
+                    }
+                    None => {
+                        debug!("not found {}", name.to_hex());
+                        write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound)
+                            .await?;
+                    }
                 }
-                let used = postcard::to_slice(&response, &mut out_buffer)?;
 
-                write_lp(&mut writer, used).await?;
-
-                debug!("written response of length {}", used.len());
-
-                if let Some(piece) = piece {
-                    debug!("writing data {}", piece.data.len());
-                    // if we found the data, write it out now
-                    writer.write_all(&piece.data).await?;
-                    debug!("done writing data");
-                }
+                debug!("finished response");
             }
             None => {
                 break;
@@ -142,33 +156,87 @@ async fn handle_stream(
     Ok(())
 }
 
-#[derive(Clone)]
-pub struct Data {
-    /// outboard data from bo
-    outboard: Bytes,
-    /// actual data
-    data: Bytes,
+#[derive(Clone, Debug, PartialEq)]
+pub enum Data {
+    File {
+        /// Outboard data from bao.
+        outboard: Bytes,
+        /// Path to the data.
+        path: PathBuf,
+        /// Size of the data.
+        size: usize,
+    },
+    Stdin {
+        /// Ooutboard data from bao.
+        outboard: Bytes,
+        /// The actual data.
+        data: Bytes,
+    },
 }
 
-pub async fn create_db(paths: Vec<&Path>) -> Result<Arc<HashMap<bao::Hash, Data>>> {
+#[derive(Debug)]
+pub enum DataSource {
+    File(PathBuf),
+    Stdin(tokio::io::Stdin),
+}
+
+pub async fn create_db(data_sources: Vec<DataSource>) -> Result<Arc<HashMap<bao::Hash, Data>>> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
-    for path in paths {
-        ensure!(path.is_file(), "can only transfer blob data");
-        let data = tokio::fs::read(path).await?;
-        let num = data.len();
-        let (outboard, hash) = bao::encode::outboard(&data);
+    for data in data_sources {
+        match data {
+            DataSource::File(path) => {
+                ensure!(path.is_file(), "can only transfer blob data");
+                let data = tokio::fs::read(&path).await?;
+                let (outboard, hash) = bao::encode::outboard(&data);
 
-        println!("- {}: {}bytes", hash.to_hex(), num);
-        db.insert(
-            hash,
-            Data {
-                outboard: Bytes::from(outboard),
-                data: Bytes::from(data),
-            },
-        );
+                println!("- {}: {}bytes", hash.to_hex(), data.len());
+                db.insert(
+                    hash,
+                    Data::File {
+                        outboard: Bytes::from(outboard),
+                        path,
+                        size: data.len(),
+                    },
+                );
+            }
+            DataSource::Stdin(mut stdin) => {
+                let mut data = BytesMut::new();
+                while stdin.read_buf(&mut data).await? > 0 {}
+
+                let (outboard, hash) = bao::encode::outboard(&data);
+
+                println!("- {}: {}bytes", hash.to_hex(), data.len());
+                db.insert(
+                    hash,
+                    Data::Stdin {
+                        outboard: Bytes::from(outboard),
+                        data: data.freeze(),
+                    },
+                );
+            }
+        }
     }
 
     Ok(Arc::new(db))
+}
+
+async fn write_response<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    buffer: &mut BytesMut,
+    id: u64,
+    res: Res<'_>,
+) -> Result<()> {
+    let response = Response { id, data: res };
+
+    if buffer.len() < 20 + response.data.len() {
+        buffer.resize(20 + response.data.len(), 0u8);
+    }
+    let used = postcard::to_slice(&response, buffer)?;
+
+    write_lp(&mut writer, used).await?;
+
+    debug!("written response of length {}", used.len());
+    Ok(())
 }

@@ -19,10 +19,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 enum Commands {
-    /// Serve the data from the given path
+    /// Serve the data from the given path. If none is specified reads from STDIN.
     #[clap(about = "Serve the data from the given path")]
     Server {
-        paths: Vec<PathBuf>,
+        path: Option<PathBuf>,
         #[clap(long, short)]
         /// Optional port, defaults to 127.0.01:4433.
         addr: Option<SocketAddr>,
@@ -32,10 +32,9 @@ enum Commands {
     Client {
         hash: bao::Hash,
         #[clap(long, short)]
-        /// Option address of the server, defaults to 127.0.0.1:4433.
+        /// Optional address of the server, defaults to 127.0.0.1:4433.
         addr: Option<SocketAddr>,
-        #[clap(long, short)]
-        /// Option path to save the file, defaults to using the hash as the name.
+        /// Optional path to save the file. If none is specified writes the data to STDOUT.
         out: Option<PathBuf>,
     },
 }
@@ -56,9 +55,6 @@ async fn main() -> Result<()> {
             if let Some(addr) = addr {
                 opts.addr = addr;
             }
-
-            // Write file out
-            let outpath = out.unwrap_or_else(|| hash.to_string().into());
 
             println!("{} Connecting ...", style("[1/3]").bold().dim());
             let pb = ProgressBar::hidden();
@@ -85,11 +81,17 @@ async fn main() -> Result<()> {
                         mut data,
                     } => {
                         ensure!(hash == new_hash, "invalid hash received");
-                        let file = tokio::fs::File::create(&outpath).await?;
-                        let out = tokio::io::BufWriter::new(file);
-                        // wrap for progress bar
-                        let mut wrapped_out = pb.wrap_async_write(out);
-                        tokio::io::copy(&mut data, &mut wrapped_out).await?;
+                        if let Some(ref out) = out {
+                            let file = tokio::fs::File::create(out).await?;
+                            let file = tokio::io::BufWriter::new(file);
+                            // wrap for progress bar
+                            let mut file = pb.wrap_async_write(file);
+                            tokio::io::copy(&mut data, &mut file).await?;
+                        } else {
+                            // Write to STDOUT
+                            let mut stdout = tokio::io::stdout();
+                            tokio::io::copy(&mut data, &mut stdout).await?;
+                        }
                     }
                     client::Event::Done(stats) => {
                         pb.finish_and_clear();
@@ -99,8 +101,13 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Server { paths, addr } => {
-            let db = server::create_db(paths.iter().map(|p| p.as_path()).collect()).await?;
+        Commands::Server { path, addr } => {
+            let sources = if let Some(path) = path {
+                vec![server::DataSource::File(path)]
+            } else {
+                vec![server::DataSource::Stdin(tokio::io::stdin())]
+            };
+            let db = server::create_db(sources).await?;
             let mut opts = server::Options::default();
             if let Some(addr) = addr {
                 opts.addr = addr;

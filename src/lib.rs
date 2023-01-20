@@ -22,7 +22,7 @@ mod tests {
         let dir: PathBuf = testdir!();
         let path = dir.join("hello_world");
         tokio::fs::write(&path, "hello world!").await?;
-        let db = server::create_db(vec![&path]).await?;
+        let db = server::create_db(vec![server::DataSource::File(path.clone())]).await?;
         let hash = *db.iter().next().unwrap().0;
         let addr = "127.0.0.1:4443".parse().unwrap();
 
@@ -76,7 +76,7 @@ mod tests {
 
             tokio::fs::write(&path, &content).await?;
 
-            let db = server::create_db(vec![&path]).await?;
+            let db = server::create_db(vec![server::DataSource::File(path)]).await?;
             let hash = *db.iter().next().unwrap().0;
 
             let server_task = tokio::task::spawn(async move {
@@ -115,7 +115,7 @@ mod tests {
         let addr = "127.0.0.1:4444".parse().unwrap();
 
         tokio::fs::write(&path, content).await?;
-        let db = server::create_db(vec![&path]).await?;
+        let db = server::create_db(vec![server::DataSource::File(path)]).await?;
         let hash = *db.iter().next().unwrap().0;
         tokio::task::spawn(async move {
             server::run(db, server::Options { addr }).await.unwrap();
