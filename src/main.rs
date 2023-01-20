@@ -92,16 +92,16 @@ async fn main() -> Result<()> {
                         pb.set_length(size as u64);
                         pb.set_draw_target(ProgressDrawTarget::stderr());
                     }
-                    client::Event::Received {
+                    client::Event::Receiving {
                         hash: new_hash,
-                        mut data,
+                        mut reader,
                     } => {
                         ensure!(hash == new_hash, "invalid hash received");
                         let file = tokio::fs::File::create(&outpath).await?;
                         let out = tokio::io::BufWriter::new(file);
                         // wrap for progress bar
                         let mut wrapped_out = pb.wrap_async_write(out);
-                        tokio::io::copy(&mut data, &mut wrapped_out).await?;
+                        tokio::io::copy(&mut reader, &mut wrapped_out).await?;
                     }
                     client::Event::Done(stats) => {
                         pb.finish_and_clear();

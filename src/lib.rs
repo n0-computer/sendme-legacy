@@ -43,15 +43,15 @@ mod tests {
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             let event = event?;
-            if let Event::Received {
+            if let Event::Receiving {
                 hash: new_hash,
-                mut data,
+                mut reader,
             } = event
             {
                 assert_eq!(hash, new_hash);
                 let expect = tokio::fs::read(&path).await?;
                 let mut got = Vec::new();
-                data.read_to_end(&mut got).await?;
+                reader.read_to_end(&mut got).await?;
                 assert_eq!(expect, got);
             }
         }
@@ -101,14 +101,14 @@ mod tests {
             tokio::pin!(stream);
             while let Some(event) = stream.next().await {
                 let event = event?;
-                if let Event::Received {
+                if let Event::Receiving {
                     hash: new_hash,
-                    mut data,
+                    mut reader,
                 } = event
                 {
                     assert_eq!(hash, new_hash);
                     let mut got = Vec::new();
-                    data.read_to_end(&mut got).await?;
+                    reader.read_to_end(&mut got).await?;
                     assert_eq!(content, got);
                 }
             }
@@ -151,14 +151,14 @@ mod tests {
             tokio::pin!(stream);
             while let Some(event) = stream.next().await {
                 let event = event?;
-                if let Event::Received {
+                if let Event::Receiving {
                     hash: new_hash,
-                    mut data,
+                    mut reader,
                 } = event
                 {
                     assert_eq!(hash, new_hash);
                     let mut got = Vec::new();
-                    data.read_to_end(&mut got).await?;
+                    reader.read_to_end(&mut got).await?;
                     assert_eq!(content, got);
                 }
             }

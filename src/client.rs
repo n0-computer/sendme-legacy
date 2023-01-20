@@ -68,11 +68,11 @@ pub enum Event {
         size: usize,
     },
     /// Content is being received.
-    Received {
+    Receiving {
         /// The hash of the content we received.
         hash: bao::Hash,
         /// The actual data we are receiving.
-        data: Box<dyn AsyncRead + Unpin + Sync + Send + 'static>,
+        reader: Box<dyn AsyncRead + Unpin + Sync + Send + 'static>,
     },
     /// The transfer is done.
     Done(Stats),
@@ -167,7 +167,7 @@ pub fn run(hash: bao::Hash, opts: Options) -> impl Stream<Item = Result<Event>> 
                                 Ok::<(), anyhow::Error>(())
                             });
 
-                            yield Event::Received { hash, data: Box::new(a) };
+                            yield Event::Receiving { hash, reader: Box::new(a) };
 
                             t.await??;
 
