@@ -102,17 +102,29 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Server { path, addr } => {
+            let mut tmp_path = None;
+
             let sources = if let Some(path) = path {
                 vec![server::DataSource::File(path)]
             } else {
-                vec![server::DataSource::Stdin(tokio::io::stdin())]
+                // Store STDIN content into a temporary file
+                let (file, path) = tempfile::NamedTempFile::new()?.into_parts();
+                let mut file = tokio::fs::File::from_std(file);
+                let path_buf = path.to_path_buf();
+                tmp_path = Some(path);
+                tokio::io::copy(&mut tokio::io::stdin(), &mut file).await?;
+                vec![server::DataSource::File(path_buf)]
             };
+
             let db = server::create_db(sources).await?;
             let mut opts = server::Options::default();
             if let Some(addr) = addr {
                 opts.addr = addr;
             }
-            server::run(db, opts).await?
+            server::run(db, opts).await?;
+
+            // Drop tempath to signal it can be destroyed
+            drop(tmp_path);
         }
     }
 

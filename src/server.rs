@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use bytes::{Bytes, BytesMut};
 use s2n_quic::stream::BidirectionalStream;
 use s2n_quic::Server;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncWrite;
 use tracing::{debug, warn};
 
 use crate::protocol::{read_lp, write_lp, Handshake, Request, Res, Response, VERSION};
@@ -99,43 +99,27 @@ async fn handle_stream(
                 debug!("got request({}): {}", request.id, name.to_hex());
 
                 match db.get(&name) {
-                    Some(piece) => {
+                    Some(Data {
+                        outboard,
+                        path,
+                        size,
+                    }) => {
                         debug!("found {}", name.to_hex());
-                        match piece {
-                            Data::File {
+                        write_response(
+                            &mut writer,
+                            &mut out_buffer,
+                            request.id,
+                            Res::Found {
+                                size: *size,
                                 outboard,
-                                path,
-                                size,
-                            } => {
-                                write_response(
-                                    &mut writer,
-                                    &mut out_buffer,
-                                    request.id,
-                                    Res::Found {
-                                        size: *size,
-                                        outboard,
-                                    },
-                                )
-                                .await?;
+                            },
+                        )
+                        .await?;
 
-                                debug!("writing data");
-                                let file = tokio::fs::File::open(&path).await?;
-                                let mut reader = tokio::io::BufReader::new(file);
-                                tokio::io::copy(&mut reader, &mut writer).await?;
-                            }
-                            Data::Stdin { outboard, data } => {
-                                let size = data.len();
-                                write_response(
-                                    &mut writer,
-                                    &mut out_buffer,
-                                    request.id,
-                                    Res::Found { size, outboard },
-                                )
-                                .await?;
-                                debug!("writing data");
-                                writer.write_all(data).await?;
-                            }
-                        }
+                        debug!("writing data");
+                        let file = tokio::fs::File::open(&path).await?;
+                        let mut reader = tokio::io::BufReader::new(file);
+                        tokio::io::copy(&mut reader, &mut writer).await?;
                     }
                     None => {
                         debug!("not found {}", name.to_hex());
@@ -157,27 +141,18 @@ async fn handle_stream(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Data {
-    File {
-        /// Outboard data from bao.
-        outboard: Bytes,
-        /// Path to the data.
-        path: PathBuf,
-        /// Size of the data.
-        size: usize,
-    },
-    Stdin {
-        /// Ooutboard data from bao.
-        outboard: Bytes,
-        /// The actual data.
-        data: Bytes,
-    },
+pub struct Data {
+    /// Outboard data from bao.
+    outboard: Bytes,
+    /// Path to the data.
+    path: PathBuf,
+    /// Size of the data.
+    size: usize,
 }
 
 #[derive(Debug)]
 pub enum DataSource {
     File(PathBuf),
-    Stdin(tokio::io::Stdin),
 }
 
 pub async fn create_db(data_sources: Vec<DataSource>) -> Result<Arc<HashMap<bao::Hash, Data>>> {
@@ -187,32 +162,21 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<Arc<HashMap<bao:
     for data in data_sources {
         match data {
             DataSource::File(path) => {
-                ensure!(path.is_file(), "can only transfer blob data");
+                ensure!(
+                    path.is_file(),
+                    "can only transfer blob data: {}",
+                    path.display()
+                );
                 let data = tokio::fs::read(&path).await?;
                 let (outboard, hash) = bao::encode::outboard(&data);
 
                 println!("- {}: {}bytes", hash.to_hex(), data.len());
                 db.insert(
                     hash,
-                    Data::File {
+                    Data {
                         outboard: Bytes::from(outboard),
                         path,
                         size: data.len(),
-                    },
-                );
-            }
-            DataSource::Stdin(mut stdin) => {
-                let mut data = BytesMut::new();
-                while stdin.read_buf(&mut data).await? > 0 {}
-
-                let (outboard, hash) = bao::encode::outboard(&data);
-
-                println!("- {}: {}bytes", hash.to_hex(), data.len());
-                db.insert(
-                    hash,
-                    Data::Stdin {
-                        outboard: Bytes::from(outboard),
-                        data: data.freeze(),
                     },
                 );
             }
