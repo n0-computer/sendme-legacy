@@ -33,6 +33,7 @@ enum Commands {
     Client {
         hash: bao::Hash,
         #[clap(long)]
+        /// PeerId of the server.
         peer_id: PeerId,
         #[clap(long, short)]
         /// Option address of the server, defaults to 127.0.0.1:4433.

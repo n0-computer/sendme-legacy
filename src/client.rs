@@ -31,10 +31,10 @@ impl Default for Options {
 }
 
 /// Setup a QUIC connection to the provided server address
-async fn setup(server_addr: SocketAddr, peer_id: Option<PeerId>) -> Result<(Client, Connection)> {
+async fn setup(opts: Options) -> Result<(Client, Connection)> {
     let keypair = Keypair::generate();
 
-    let client_config = tls::make_client_config(&keypair, peer_id)?;
+    let client_config = tls::make_client_config(&keypair, opts.peer_id)?;
     let tls = s2n_quic::provider::tls::rustls::Client::from(client_config);
 
     let client = Client::builder()
@@ -43,8 +43,8 @@ async fn setup(server_addr: SocketAddr, peer_id: Option<PeerId>) -> Result<(Clie
         .start()
         .map_err(|e| anyhow!("{:?}", e))?;
 
-    debug!("client: connecting to {}", server_addr);
-    let connect = Connect::new(server_addr).with_server_name("localhost");
+    debug!("client: connecting to {}", opts.addr);
+    let connect = Connect::new(opts.addr).with_server_name("localhost");
     let mut connection = client.connect(connect).await?;
 
     connection.keep_alive(true)?;
@@ -71,7 +71,7 @@ pub fn run<D: AsyncWrite + Unpin>(
 ) -> impl Stream<Item = Result<Event>> {
     async_stream::try_stream! {
         let now = Instant::now();
-        let (_client, mut connection) = setup(opts.addr, opts.peer_id).await?;
+        let (_client, mut connection) = setup(opts).await?;
 
         let stream = connection.open_bidirectional_stream().await?;
         let (mut reader, mut writer) = stream.split();
