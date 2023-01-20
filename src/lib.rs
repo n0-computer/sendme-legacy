@@ -8,9 +8,11 @@ mod tls;
 mod tests {
     use std::{net::SocketAddr, path::PathBuf};
 
+    use crate::client::Event;
+
     use super::*;
     use anyhow::Result;
-    use futures::TryStreamExt;
+    use futures::StreamExt;
     use rand::RngCore;
     use testdir::testdir;
     use tokio::io::AsyncReadExt;
@@ -29,14 +31,22 @@ mod tests {
         });
 
         let opts = client::Options { addr };
-        let (mut source, sink) = tokio::io::duplex(1024);
-        let events: Vec<_> = client::run(hash, opts, sink).try_collect().await?;
-        assert_eq!(events.len(), 3);
-        let expect = tokio::fs::read(path).await?;
-        let mut got = Vec::new();
-        source.read_to_end(&mut got).await?;
-
-        assert_eq!(expect, got);
+        let stream = client::run(hash, opts);
+        tokio::pin!(stream);
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            if let Event::Received {
+                hash: new_hash,
+                mut data,
+            } = event
+            {
+                assert_eq!(hash, new_hash);
+                let expect = tokio::fs::read(&path).await?;
+                let mut got = Vec::new();
+                data.read_to_end(&mut got).await?;
+                assert_eq!(expect, got);
+            }
+        }
 
         Ok(())
     }
@@ -74,13 +84,22 @@ mod tests {
             });
 
             let opts = client::Options { addr };
-            let (mut source, sink) = tokio::io::duplex(size);
-            let events: Vec<_> = client::run(hash, opts, sink).try_collect().await?;
-            assert_eq!(events.len(), 3);
-            let mut got = Vec::new();
-            source.read_to_end(&mut got).await?;
+            let stream = client::run(hash, opts);
+            tokio::pin!(stream);
+            while let Some(event) = stream.next().await {
+                let event = event?;
+                if let Event::Received {
+                    hash: new_hash,
+                    mut data,
+                } = event
+                {
+                    assert_eq!(hash, new_hash);
+                    let mut got = Vec::new();
+                    data.read_to_end(&mut got).await?;
+                    assert_eq!(content, got);
+                }
+            }
 
-            assert_eq!(content, got);
             server_task.abort();
             let _ = server_task.await;
         }
@@ -104,12 +123,21 @@ mod tests {
 
         async fn run_client(hash: bao::Hash, addr: SocketAddr, content: Vec<u8>) -> Result<()> {
             let opts = client::Options { addr };
-            let (mut source, sink) = tokio::io::duplex(1024);
-            let events: Vec<_> = client::run(hash, opts, sink).try_collect().await?;
-            assert_eq!(events.len(), 3);
-            let mut got = Vec::new();
-            source.read_to_end(&mut got).await?;
-            assert_eq!(content, got);
+            let stream = client::run(hash, opts);
+            tokio::pin!(stream);
+            while let Some(event) = stream.next().await {
+                let event = event?;
+                if let Event::Received {
+                    hash: new_hash,
+                    mut data,
+                } = event
+                {
+                    assert_eq!(hash, new_hash);
+                    let mut got = Vec::new();
+                    data.read_to_end(&mut got).await?;
+                    assert_eq!(content, got);
+                }
+            }
             Ok(())
         }
 
