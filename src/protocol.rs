@@ -50,6 +50,7 @@ pub enum Res<'a> {
         /// The size of the coming data in bytes, raw content size.
         size: usize,
         outboard: &'a [u8],
+        collection: bool,
     },
 }
 

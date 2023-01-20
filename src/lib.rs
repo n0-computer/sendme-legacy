@@ -1,3 +1,4 @@
+mod blobs;
 pub mod get;
 pub mod protocol;
 pub mod provider;

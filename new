@@ -1,0 +1,11 @@
+- arbitrary MAX_BLOBS_SIZE, basically how many files can we transfer
+roughly 3MB, can transfer information about ~6000 files at once
+4 bytes per char, about 100 chars in a file name + 32 bytes for the hash
+
+- event passes a channel that returns vec[u8], read from that to write to
+  whereever
+
+- should i just simplify the 
+- should we just store this in the main store & write it to a tempfile?
+
+- Do we write ListOfBlob data to tempfile?

@@ -167,12 +167,15 @@ async fn main() -> Result<()> {
                 vec![provider::DataSource::File(path_buf)]
             };
 
-            let db = provider::create_db(sources).await?;
+            let (db, blobs_db) = provider::create_db(sources).await?;
             let mut opts = provider::Options::default();
             if let Some(addr) = addr {
                 opts.addr = addr;
             }
-            let mut provider_builder = provider::Provider::builder().database(db).keypair(keypair);
+            let mut provider_builder = provider::Provider::builder()
+                .database(db)
+                .blobs_database(blobs_db)
+                .keypair(keypair);
             if let Some(ref hex) = auth_token {
                 let auth_token = AuthToken::from_str(hex)?;
                 provider_builder = provider_builder.auth_token(auth_token);

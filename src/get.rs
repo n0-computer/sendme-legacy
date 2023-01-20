@@ -144,7 +144,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                 Some(response_buffer) => {
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
-                        Res::Found { size, outboard } => {
+                        Res::Found { size, outboard, .. } => {
                             yield Event::Requested { size };
 
                             // Need to read the message now
