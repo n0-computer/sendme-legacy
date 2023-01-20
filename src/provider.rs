@@ -9,6 +9,7 @@ use s2n_quic::Server as QuicServer;
 use tokio::io::AsyncWrite;
 use tracing::{debug, warn};
 
+use crate::blobs::{Blob, Blobs};
 use crate::protocol::{read_lp, write_lp, AuthToken, Handshake, Request, Res, Response, VERSION};
 use crate::tls::{self, Keypair, PeerId};
 
@@ -31,11 +32,19 @@ const MAX_STREAMS: u64 = 10;
 
 pub type Database = Arc<HashMap<bao::Hash, Data>>;
 
+/// (Outboard, Data)
+// TODO: other option is to write the blobs data to a tempfile & store
+// in the main Database. Would need to add a "list of blobs" flag to `Data`
+// to make it clear that the data would deserialize to a `ListOfBlobs` rather
+// than representing true blob data.
+pub type BlobsDatabase = Arc<HashMap<bao::Hash, (Bytes, Bytes)>>;
+
 #[derive(Debug)]
 pub struct Provider {
     keypair: Keypair,
     auth_token: AuthToken,
     db: Database,
+    blobs_db: BlobsDatabase,
 }
 
 /// Builder to configure a `Provider`.
@@ -44,6 +53,7 @@ pub struct ProviderBuilder {
     auth_token: Option<AuthToken>,
     keypair: Option<Keypair>,
     db: Option<Database>,
+    blobs_db: Option<BlobsDatabase>,
 }
 
 impl ProviderBuilder {
@@ -65,14 +75,22 @@ impl ProviderBuilder {
         self
     }
 
+    /// Set blobs database.
+    pub fn blobs_database(mut self, db: BlobsDatabase) -> Self {
+        self.blobs_db = Some(db);
+        self
+    }
+
     /// Consumes the builder and constructs a `Provider`.
     pub fn build(self) -> Result<Provider> {
         ensure!(self.db.is_some(), "missing database");
+        ensure!(self.blobs_db.is_some(), "missing blobs database");
 
         Ok(Provider {
             auth_token: self.auth_token.unwrap_or_else(AuthToken::generate),
             keypair: self.keypair.unwrap_or_else(Keypair::generate),
             db: self.db.unwrap(),
+            blobs_db: self.blobs_db.unwrap(),
         })
     }
 }
@@ -176,6 +194,7 @@ async fn handle_stream(
                             Res::Found {
                                 size: *size,
                                 outboard,
+                                collection: false,
                             },
                         )
                         .await?;
@@ -219,10 +238,12 @@ pub enum DataSource {
     File(PathBuf),
 }
 
-pub async fn create_db(data_sources: Vec<DataSource>) -> Result<Arc<HashMap<bao::Hash, Data>>> {
+pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, BlobsDatabase)> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
+    let mut blobs_db = HashMap::new();
+    let mut b = Blobs::new("collection");
     for data in data_sources {
         match data {
             DataSource::File(path) => {
@@ -239,15 +260,29 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<Arc<HashMap<bao:
                     hash,
                     Data {
                         outboard: Bytes::from(outboard),
-                        path,
+                        path: path.clone(),
                         size: data.len(),
                     },
                 );
+                b.push(Blob {
+                    name: path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    hash: hash.into(),
+                });
             }
         }
     }
 
-    Ok(Arc::new(db))
+    let mut buffer = BytesMut::zeroed(b.len());
+    let data = postcard::to_slice(&b, &mut buffer)?;
+    let (outboard, hash) = bao::encode::outboard(&data);
+    blobs_db.insert(hash, (Bytes::from(outboard), Bytes::from(data.to_vec())));
+    println!("collection: {}", hash.to_hex());
+
+    Ok((Arc::new(db), Arc::new(blobs_db)))
 }
 
 async fn write_response<W: AsyncWrite + Unpin>(
