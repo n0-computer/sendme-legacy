@@ -50,7 +50,16 @@ pub enum Res<'a> {
         /// The size of the coming data in bytes, raw content size.
         size: usize,
         outboard: &'a [u8],
-        collection: bool,
+    },
+    /// Indicates that the given hash referred to a collection of multiple blobs
+    /// A stream of boa data that decodes to a `ListOfBlobs` is sent as the next message,
+    /// followed by `Res::Found` responses, send in the order indicated in the `ListOfBlobs`.
+    FoundCollection {
+        /// The size of the coming data in bytes, raw content size.
+        size: usize,
+        outboard: &'a [u8],
+        /// The size of the raw data we are planning to transfer
+        raw_transfer_size: usize,
     },
 }
 

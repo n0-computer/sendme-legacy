@@ -149,6 +149,7 @@ async fn main() -> Result<()> {
                     get::Event::Receiving {
                         hash: new_hash,
                         mut reader,
+                        ..
                     } => {
                         ensure!(hash == new_hash, "invalid hash received");
                         if let Some(ref outpath) = out {
