@@ -27,10 +27,14 @@ mod tests {
         let dir: PathBuf = testdir!();
         let path = dir.join("hello_world");
         tokio::fs::write(&path, "hello world!").await?;
-        let db = provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
-        let hash = *db.iter().next().unwrap().0;
+        let (db, blob_db) =
+            provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
+        let hash = *blob_db.iter().next().unwrap().0;
         let addr = "127.0.0.1:4443".parse().unwrap();
-        let mut provider = provider::Provider::builder().database(db).build()?;
+        let mut provider = provider::Provider::builder()
+            .database(db)
+            .blobs_database(blob_db)
+            .build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 
@@ -49,6 +53,7 @@ mod tests {
             if let Event::Receiving {
                 hash: new_hash,
                 mut reader,
+                ..
             } = event
             {
                 assert_eq!(hash, new_hash);
@@ -87,9 +92,13 @@ mod tests {
 
             tokio::fs::write(&path, &content).await?;
 
-            let db = provider::create_db(vec![provider::DataSource::File(path)]).await?;
-            let hash = *db.iter().next().unwrap().0;
-            let mut provider = provider::Provider::builder().database(db).build()?;
+            let (db, blobs_db) =
+                provider::create_db(vec![provider::DataSource::File(path)]).await?;
+            let hash = *blobs_db.iter().next().unwrap().0;
+            let mut provider = provider::Provider::builder()
+                .database(db)
+                .blobs_database(blobs_db)
+                .build()?;
             let peer_id = provider.peer_id();
             let token = provider.auth_token();
 
@@ -108,6 +117,7 @@ mod tests {
                 if let Event::Receiving {
                     hash: new_hash,
                     mut reader,
+                    ..
                 } = event
                 {
                     assert_eq!(hash, new_hash);
@@ -132,9 +142,12 @@ mod tests {
         let addr = "127.0.0.1:4444".parse().unwrap();
 
         tokio::fs::write(&path, content).await?;
-        let db = provider::create_db(vec![provider::DataSource::File(path)]).await?;
-        let hash = *db.iter().next().unwrap().0;
-        let mut provider = provider::Provider::builder().database(db).build()?;
+        let (db, blobs_db) = provider::create_db(vec![provider::DataSource::File(path)]).await?;
+        let hash = *blobs_db.iter().next().unwrap().0;
+        let mut provider = provider::Provider::builder()
+            .database(db)
+            .blobs_database(db)
+            .build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 

@@ -8,4 +8,54 @@ roughly 3MB, can transfer information about ~6000 files at once
 - should i just simplify the 
 - should we just store this in the main store & write it to a tempfile?
 
-- Do we write ListOfBlob data to tempfile?
+- We currently don't "pre-check" to see if we are missing certain hashes in the
+  list. Should we pre-check? We currently don't skip & just give you everything
+  we have without failing for a `NotFound`
+- Do we write ListOfBlob data to tempfile, rather than creating a whole new
+  store to store in mem?
+
+- Choices made that are up for debate
+  - to simplify, any `out` that is passed in is assumed to be the directory you
+    want the file saved in.
+
+DB choices that we can/should debate:
+- There is currently a separate (mem) database for `ListOfBlobs` than the blobs
+  themselves. It seems reasonable to me to instead store the `ListOfBlobs` in
+  a tempfile, and store them in the same database as the blobs. This would
+  streamline our DB story and also streamline the protocol code a bit.
+
+Protocol choices made that we can/should debate:
+- We don't "pre-check" the hashes to see if any are missing before starting
+  a transfer. Trying to get to the actual "transfering" asap.
+- As soon as a hash is `NotFound`, we end the transfer. We could continue
+  trying to send other hashes in the list (if there are any).
+- In the case of an error, we don't clean up any files that have already been 
+  transfered successfully. This seems like a reasonable expectation to me, but
+  open to be proved wrong.
+- The `out` flag is now the expected directory you want to save the given file.
+  We use the filename from the original path to name the file. In the case of
+  stdin, this is the hash of the file.
+
+General Question:
+- I added the `Res::FoundCollection` Response to indicate that we are sending over
+  a list of blobs rather than just a single blob. However, I debated just
+  adding a flag `collection: bool` to the `Res::Found` Response. I leaned
+  toward adding a new enum (even though it has the same fields as
+  `Res::Found`), because it keeps the response size smaller (barely), but also
+  is potentially easier to read/understand as you are going through the code.
+  But it does feel goofy to add an enum that has the same exact structure. Just
+  looking for some guidance on if this is the more reasonable move.
+
+TODO:
+
+- DONE Add `FoundCollection`
+- switch on `FoundCollection` & `Found`, if `Found` do the read, send over the
+  event & just end.
+- If `FoundCollection`, assume we are getting a list of things, and iterate
+  until `NotFound` or `Finished`
+- If `NotFound` returned, error out.
+
+- Question: elegant way to add name to transfer? does this come in the
+  pre-data?
+
+
