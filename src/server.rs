@@ -161,7 +161,7 @@ async fn handle_stream(
 pub struct Data {
     /// Outboard data from bao.
     outboard: Bytes,
-    /// Path to the data.
+    /// Path to the original data, which must not change while in use.
     path: PathBuf,
     /// Size of the data.
     size: usize,
