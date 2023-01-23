@@ -11,7 +11,7 @@ use s2n_quic::{client::Connect, Client};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tracing::debug;
 
-use crate::blobs::{Blob, Blobs};
+use crate::blobs::Blobs;
 use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
 use crate::tls::{self, Keypair, PeerId};
 
@@ -147,61 +147,91 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
             debug!("reading response");
             let mut in_buffer = BytesMut::with_capacity(1024);
 
+            // track total amount of blob data transfered
+            let mut data_len = 0;
             // read next message
             match read_lp_data(&mut reader, &mut in_buffer).await? {
                 Some(response_buffer) => {
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
+                        // server is sending over a collection of blobs
                         Res::FoundCollection { size, outboard, raw_transfer_size } => {
                             if raw_transfer_size > MAX_DATA_SIZE {
 
-                                Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
+                                Err(anyhow!("size too large: {} > {}", raw_transfer_size, MAX_DATA_SIZE))?;
                             }
+                            data_len = raw_transfer_size;
 
                             yield Event::Requested { size: raw_transfer_size };
 
-                            let collection = read_collection(size, outboard, hash, &mut reader, &mut in_buffer).await?;
-                            for blob in collection.blobs {
-                                let (event, t) = read_blob(blob, &mut reader, &mut in_buffer).await?;
-                                yield event;
-                                t.await??;
-                            }
+                            // decode the collection
+                            let collection = read_and_decode_collection_data(size, outboard, hash, &mut reader, &mut in_buffer).await?;
 
-                            todo!();
+                            for blob in collection.blobs {
+                                // read next message
+                                println!("{:#?}", in_buffer);
+                                match read_lp_data(&mut reader, &mut in_buffer).await? {
+                                    Some(response_buffer) => {
+                                        println!("response_buffer {:#?}", response_buffer);
+                                        let response: Response = postcard::from_bytes(&response_buffer)?;
+                                        match response.data {
+                                            // unexpected message
+                                            Res::FoundCollection { .. } => {
+                                                Err(anyhow!("unexpected message from server. ending transfer early"))?;
+                                            },
+                                            // blob data not found
+                                            Res::NotFound => {
+                                                Err(anyhow!("data for {} not found", bao::Hash::from(blob.hash).to_hex()))?;
+                                             },
+                                            // next blob in collection will be sent over
+                                            Res::Found { size, outboard } => {
+                                                let (event, task) = read_and_decode_blob_data(size, outboard, hash, &mut reader).await?;
+                                                yield event;
+
+                                                task.await??;
+                                            }
+                                        }
+                                     },
+                                     None => {
+                                        Err(anyhow!("server disconnected"))?;
+                                     }
+                                }
+                            }
                         }
-                        Res::Found { size, outboard, .. } => {
+                        // server is sending over a single blob
+                        Res::Found { size, outboard } => {
                             yield Event::Requested { size };
                             if size > MAX_DATA_SIZE {
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
+                            data_len = size;
 
-                            let (event, task) = read_blob_data(size, outboard, hash, reader).await?;
+                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, reader).await?;
                             yield event;
 
                             task.await??;
-
-                            // Shut down the stream
-                            debug!("shutting down stream");
-                            writer.close().await?;
-
-                            let data_len = size;
-                            let elapsed = now.elapsed();
-                            let elapsed_s = elapsed.as_secs_f64();
-                            let data_len_bit = data_len * 8;
-                            let mbits = data_len_bit as f64 / (1000. * 1000.) / elapsed_s;
-
-                            let stats = Stats {
-                                data_len,
-                                elapsed,
-                                mbits,
-                            };
-
-                            yield Event::Done(stats);
                         }
+                        // data associated with the hash is not found
                         Res::NotFound => {
                             Err(anyhow!("data not found"))?;
                         }
                     }
+                    // Shut down the stream
+                    debug!("shutting down stream");
+                    writer.close().await?;
+
+                    let elapsed = now.elapsed();
+                    let elapsed_s = elapsed.as_secs_f64();
+                    let data_len_bit = data_len * 8;
+                    let mbits = data_len_bit as f64 / (1000. * 1000.) / elapsed_s;
+
+                    let stats = Stats {
+                        data_len,
+                        elapsed,
+                        mbits,
+                    };
+
+                    yield Event::Done(stats);
                 }
                 None => {
                     Err(anyhow!("provider disconnected"))?;
@@ -211,15 +241,15 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-async fn read_blob_data<R: AsyncRead + Unpin>(
+async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
     size: usize,
     outboard: &[u8],
     hash: bao::Hash,
     mut reader: R,
 ) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
     // TODO: avoid buffering
-    // TODO: buffer is moved into the task. would like help figuring out a way to not re-allocate
-    // for each time this fn is called
+    // TODO: buffer is moved into the task. would like help figuring out how to pass this in rather
+    // than re-allocating each time this fn is called
     let mut buffer = BytesMut::with_capacity(1024);
     while buffer.len() < size {
         reader.read_buf(&mut buffer).await?;
@@ -268,7 +298,7 @@ async fn read_blob_data<R: AsyncRead + Unpin>(
     ))
 }
 
-async fn read_collection<R: AsyncRead + Unpin>(
+async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
     size: usize,
     outboard: &[u8],
     hash: bao::Hash,
@@ -276,6 +306,10 @@ async fn read_collection<R: AsyncRead + Unpin>(
     buffer: &mut BytesMut,
 ) -> Result<Blobs> {
     // TODO: avoid buffering
+    if buffer.len() > size {
+        buffer.resize(size, 0u8);
+    }
+    println!("buffer len {}", buffer.len());
     while buffer.len() < size {
         reader.read_buf(buffer).await?;
     }
@@ -307,12 +341,4 @@ async fn read_collection<R: AsyncRead + Unpin>(
     }
     let blobs: Blobs = postcard::from_bytes(&data)?;
     Ok(blobs)
-}
-
-async fn read_blob<R: AsyncRead + Unpin>(
-    blob: Blob,
-    mut reader: R,
-    buffer: &mut BytesMut,
-) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
-    todo!();
 }

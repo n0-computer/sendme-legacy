@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// TODO(ramfox): we can't use max size b/c of the strings
+// right now I'm doing a weird calculation to estimate the buffer size
+// but we could limit the # of chars in a filename instead
+// use postcard::experimental::max_size::MaxSize;
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub(crate) struct Blobs {
     /// The name of this collection
@@ -16,25 +21,4 @@ pub(crate) struct Blob {
     pub(crate) name: String,
     /// The hash of the blob of data
     pub(crate) hash: [u8; 32],
-}
-
-impl Blobs {
-    /// The length of the Collection structure itself.
-    ///
-    /// **Not** the length of the raw data refered to by this collection of links.
-    pub fn len(&self) -> usize {
-        let mut len = self.name.len();
-        // TODO: should we just estimate this?
-        // e/g, expect name to be max 400 bytes (4 chars per byte * 100 chars)
-        // 400 * self.blobs.len()??
-        for blob in &self.blobs {
-            len += blob.name.len() + 32;
-        }
-        len
-    }
-
-    /// The size of the raw data refered to by this collection of links
-    pub fn raw_data_size(&self) -> usize {
-        self.raw_size
-    }
 }

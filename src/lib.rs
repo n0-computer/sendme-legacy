@@ -53,7 +53,7 @@ mod tests {
             if let Event::Receiving {
                 hash: new_hash,
                 mut reader,
-                ..
+                name,
             } = event
             {
                 assert_eq!(hash, new_hash);
@@ -61,6 +61,7 @@ mod tests {
                 let mut got = Vec::new();
                 reader.read_to_end(&mut got).await?;
                 assert_eq!(expect, got);
+                assert_eq!(name, Some("hello world".to_string()));
             }
         }
 
@@ -117,13 +118,14 @@ mod tests {
                 if let Event::Receiving {
                     hash: new_hash,
                     mut reader,
-                    ..
+                    name,
                 } = event
                 {
                     assert_eq!(hash, new_hash);
                     let mut got = Vec::new();
                     reader.read_to_end(&mut got).await?;
                     assert_eq!(content, got);
+                    assert_eq!(name, Some("hello world".to_string()));
                 }
             }
 
@@ -173,12 +175,14 @@ mod tests {
                 if let Event::Receiving {
                     hash: new_hash,
                     mut reader,
+                    name,
                 } = event
                 {
                     assert_eq!(hash, new_hash);
                     let mut got = Vec::new();
                     reader.read_to_end(&mut got).await?;
                     assert_eq!(content, got);
+                    assert_eq!(name, Some("hello world".to_string()));
                 }
             }
             Ok(())

@@ -270,6 +270,7 @@ async fn send_blob<W: AsyncWrite + Unpin>(
             let file = tokio::fs::File::open(&path).await?;
             let mut reader = tokio::io::BufReader::new(file);
             tokio::io::copy(&mut reader, &mut writer).await?;
+            println!("SENT {name}");
             Ok(SentStatus::Sent)
         }
         None => {
@@ -302,6 +303,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
     let mut blobs_db = HashMap::new();
     let mut blobs = Vec::new();
     let mut raw_size = 0;
+    let mut blobs_encoded_size_estimate = 0;
     for data in data_sources {
         match data {
             DataSource::File(path) => {
@@ -323,12 +325,14 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
                     },
                 );
                 raw_size += data.len();
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                blobs_encoded_size_estimate += name.len() + 32;
                 blobs.push(Blob {
-                    name: path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default()
-                        .to_string(),
+                    name,
                     hash: hash.into(),
                 });
             }
@@ -339,11 +343,13 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
         blobs,
         raw_size,
     };
-    let mut buffer = BytesMut::zeroed(b.len());
+    blobs_encoded_size_estimate += b.name.len();
+    let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
     let data = postcard::to_slice(&b, &mut buffer)?;
+    println!("blobs len {}", data.len());
     let (outboard, hash) = bao::encode::outboard(&data);
     blobs_db.insert(hash, (Bytes::from(outboard), Bytes::from(data.to_vec())));
-    println!("collection: {}", hash.to_hex());
+    println!("collection:\n- {}", hash.to_hex());
 
     Ok((Arc::new(db), Arc::new(blobs_db)))
 }
