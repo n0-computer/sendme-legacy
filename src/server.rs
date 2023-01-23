@@ -163,7 +163,7 @@ pub struct Data {
     outboard: Bytes,
     /// Path to the original data, which must not change while in use.
     path: PathBuf,
-    /// Size of the data.
+    /// Size of the original data.
     size: usize,
 }
 
