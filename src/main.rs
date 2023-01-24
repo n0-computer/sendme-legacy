@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
                         println!("  {}", style(format!("Receiving {}...", hash)).bold().dim());
 
                         if let Some(ref outpath) = out {
-                            let name = name.map_or_else(|| hash.to_hex().to_string(), |n| n);
+                            let name = name.map_or_else(|| hash.to_string(), |n| n);
                             tokio::fs::create_dir_all(outpath).await?;
                             let dirpath = std::path::PathBuf::from(outpath);
                             let filepath = dirpath.join(name);

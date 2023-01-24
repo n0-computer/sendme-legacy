@@ -9,6 +9,7 @@ pub use tls::{Keypair, PeerId, PeerIdError, PublicKey, SecretKey, Signature};
 
 #[cfg(test)]
 mod tests {
+
     use std::{net::SocketAddr, path::PathBuf};
 
     use crate::get::Event;
