@@ -11,7 +11,7 @@ use s2n_quic::{client::Connect, Client};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tracing::debug;
 
-use crate::blobs::Blobs;
+use crate::blobs::Collection;
 use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
 use crate::tls::{self, Keypair, PeerId};
 
@@ -177,7 +177,6 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                              },
                                             // next blob in collection will be sent over
                                             Res::Found { size, outboard } => {
-                                                println!("Res::Found size {size}");
                                                 let (event, task) = read_and_decode_blob_data(size, outboard, bao::Hash::from(blob.hash), Some(blob.name), &mut reader, &mut in_buffer).await?;
 
                                                 yield event;
@@ -195,15 +194,13 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                         // server is sending over a single blob
                         Res::Found { size, outboard } => {
                             yield Event::Requested { size };
-                            println!("got FOUND response with data size {size}");
+
+                            // Need to read the message now
                             if size > MAX_DATA_SIZE {
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
-                            data_len = size;
-
-                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, None, reader, &mut in_buffer).await?;
+                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, None, &mut reader, &mut in_buffer).await?;
                             yield event;
-
                             task.await??;
                         }
                         // data associated with the hash is not found
@@ -213,7 +210,6 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                     }
 
                     // Shut down the stream
-                    println!("shutting down stream");
                     debug!("shutting down stream");
                     writer.close().await?;
 
@@ -271,60 +267,24 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
 ) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
     let data = read_data(size, reader, buffer).await?;
     let (a, mut b) = tokio::io::duplex(1024);
-    println!("data size: {:#?}", size);
 
     // TODO: avoid copy
     let outboard = outboard.to_vec();
     let t = tokio::task::spawn(async move {
-        println!("in task...");
-        let mut buf = [0u8; 1024];
         let mut decoder =
             bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
 
+        let mut buf = [0u8; 1024];
         loop {
             // TODO: avoid blocking
-            let read_res = decoder.read(&mut buf);
-            println!("read_res: {:#?}", read_res);
-            let read = read_res?;
+            let read = decoder.read(&mut buf)?;
             if read == 0 {
                 break;
             }
+            b.write_all(&buf[..read]).await?;
         }
-        // tokio::task::spawn_blocking(move || {
-        //     let mut decoder = bao::decode::Decoder::new_outboard(
-        //         std::io::Cursor::new(&data[..]),
-        //         &*outboard,
-        //         &hash,
-        //     );
-
-        //     loop {
-        //         loops += 1;
-        //         // TODO: avoid blocking
-        //         println!("decoder loop {loops}");
-        //         let read = decoder.read(&mut buf)?;
-        //         if read == 0 {
-        //             println!("break!");
-        //             break Ok::<(), anyhow::Error>(());
-        //         }
-        //         // b.write(&buf[..read]).await?;
-        //     }
-        // })
-        // .await??;
-
-        println!("about to write:");
-        // let written = b.write(&d).await?;
-        let mut written = 0;
-        while written < size {
-            let written_res = b.write(&data[written..]).await;
-            println!("written_res: {:#?}", written_res);
-            written += written_res?;
-            tokio::task::yield_now().await;
-            println!("wrote {written} so far");
-        }
-        println!("wrote {written}!");
         b.flush().await?;
         debug!("finished writing");
-        println!("finished writing");
         Ok::<(), anyhow::Error>(())
     });
 
@@ -344,7 +304,7 @@ async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
     hash: bao::Hash,
     reader: R,
     buffer: &mut BytesMut,
-) -> Result<Blobs> {
+) -> Result<Collection> {
     let data = read_data(size, reader, buffer).await?;
     // TODO: avoid copy
     let outboard = outboard.to_vec();
@@ -359,6 +319,6 @@ async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
             break;
         }
     }
-    let blobs: Blobs = postcard::from_bytes(&data)?;
-    Ok(blobs)
+    let c: Collection = postcard::from_bytes(&data)?;
+    Ok(c)
 }

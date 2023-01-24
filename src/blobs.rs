@@ -1,12 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-// TODO(ramfox): we can't use max size b/c of the strings
-// right now I'm doing a weird calculation to estimate the buffer size
-// but we could limit the # of chars in a filename instead
-// use postcard::experimental::max_size::MaxSize;
-
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub(crate) struct Blobs {
+pub(crate) struct Collection {
     /// The name of this collection
     pub(crate) name: String,
     /// Links to other blobs in this collection

@@ -13,7 +13,7 @@ const MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 100;
 
 pub const VERSION: u64 = 1;
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, MaxSize)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, MaxSize)]
 pub struct Handshake {
     pub version: u64,
     pub token: AuthToken,
@@ -28,21 +28,21 @@ impl Handshake {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, MaxSize)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, MaxSize)]
 pub struct Request {
     pub id: u64,
     /// blake3 hash
     pub name: [u8; 32],
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
 pub struct Response<'a> {
     pub id: u64,
     #[serde(borrow)]
     pub data: Res<'a>,
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
 pub enum Res<'a> {
     NotFound,
     // If found, a stream of bao data is sent as next message.
@@ -52,8 +52,8 @@ pub enum Res<'a> {
         outboard: &'a [u8],
     },
     /// Indicates that the given hash referred to a collection of multiple blobs
-    /// A stream of boa data that decodes to a `ListOfBlobs` is sent as the next message,
-    /// followed by `Res::Found` responses, send in the order indicated in the `ListOfBlobs`.
+    /// A stream of boa data that decodes to a `Collection` is sent as the next message,
+    /// followed by `Res::Found` responses, send in the order indicated in the `Collection`.
     FoundCollection {
         /// The size of the coming data in bytes, raw content size.
         size: usize,
