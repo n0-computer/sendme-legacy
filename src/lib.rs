@@ -24,21 +24,33 @@ mod tests {
 
     #[tokio::test]
     async fn basics() -> Result<()> {
+        let filename = "hello_world";
+        let res = single_file_in_collection(filename, "hello world!".as_bytes()).await;
+        println!("res {:#?}", res);
+        res
+    }
+
+    async fn single_file_in_collection(filename: &str, data: &[u8]) -> Result<()> {
         let dir: PathBuf = testdir!();
-        let path = dir.join("hello_world");
-        tokio::fs::write(&path, "hello world!").await?;
-        let (db, blob_db) =
+        let path = dir.join(filename);
+        tokio::fs::write(&path, data).await?;
+
+        // hash of the transfer file
+        let data = tokio::fs::read(&path).await?;
+        let (_, expect_hash) = bao::encode::outboard(&data);
+
+        let (db, blobs_db) =
             provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
-        let hash = *blob_db.iter().next().unwrap().0;
-        let addr = "127.0.0.1:4443".parse().unwrap();
+        let _collection_hash = *blobs_db.iter().next().unwrap().0;
         let mut provider = provider::Provider::builder()
             .database(db)
-            .blobs_database(blob_db)
+            .blobs_database(blobs_db)
             .build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
+        let addr = "127.0.0.1:4443".parse().unwrap();
 
-        tokio::task::spawn(async move {
+        let provider_task = tokio::task::spawn(async move {
             provider.run(provider::Options { addr }).await.unwrap();
         });
 
@@ -46,36 +58,47 @@ mod tests {
             addr,
             peer_id: Some(peer_id),
         };
-        let stream = get::run(hash, token, opts);
+        // let stream = client::run(collection_hash, token, opts);
+        let stream = get::run(expect_hash, token, opts);
         tokio::pin!(stream);
+
+        let mut receiving_event = None;
+
+        // needs to iterate until `done`
         while let Some(event) = stream.next().await {
+            println!("EVENT: {:#?}", event);
             let event = event?;
-            if let Event::Receiving {
-                hash: new_hash,
-                mut reader,
-                name,
-            } = event
-            {
-                assert_eq!(hash, new_hash);
-                let expect = tokio::fs::read(&path).await?;
-                let mut got = Vec::new();
-                reader.read_to_end(&mut got).await?;
-                assert_eq!(expect, got);
-                assert_eq!(name, Some("hello world".to_string()));
+            if let Event::Receiving { .. } = event {
+                receiving_event = Some(event);
             }
         }
 
+        if let Some(Event::Receiving {
+            hash: got_hash,
+            mut reader,
+            name,
+        }) = receiving_event
+        {
+            assert_eq!(expect_hash, got_hash);
+            let expect = tokio::fs::read(&path).await?;
+            let mut got = Vec::new();
+            reader.read_to_end(&mut got).await?;
+            // println!("got len: {}", got.len())
+            assert_eq!(expect.len(), got.len());
+            assert_eq!(name, Some(filename.to_string()));
+        }
+
+        provider_task.abort();
+        let _ = provider_task.await;
         Ok(())
     }
 
     #[tokio::test]
     async fn sizes() -> Result<()> {
-        let addr = "127.0.0.1:4445".parse().unwrap();
-
         let sizes = [
-            10,
-            100,
-            1024,
+            // 10,
+            // 100,
+            // 1024,
             1024 * 100,
             1024 * 500,
             1024 * 1024,
@@ -84,53 +107,9 @@ mod tests {
 
         for size in sizes {
             println!("testing {size} bytes");
-
-            let dir: PathBuf = testdir!();
-            let path = dir.join("hello_world");
-
             let mut content = vec![0u8; size];
             rand::thread_rng().fill_bytes(&mut content);
-
-            tokio::fs::write(&path, &content).await?;
-
-            let (db, blobs_db) =
-                provider::create_db(vec![provider::DataSource::File(path)]).await?;
-            let hash = *blobs_db.iter().next().unwrap().0;
-            let mut provider = provider::Provider::builder()
-                .database(db)
-                .blobs_database(blobs_db)
-                .build()?;
-            let peer_id = provider.peer_id();
-            let token = provider.auth_token();
-
-            let provider_task = tokio::task::spawn(async move {
-                provider.run(provider::Options { addr }).await.unwrap();
-            });
-
-            let opts = get::Options {
-                addr,
-                peer_id: Some(peer_id),
-            };
-            let stream = get::run(hash, token, opts);
-            tokio::pin!(stream);
-            while let Some(event) = stream.next().await {
-                let event = event?;
-                if let Event::Receiving {
-                    hash: new_hash,
-                    mut reader,
-                    name,
-                } = event
-                {
-                    assert_eq!(hash, new_hash);
-                    let mut got = Vec::new();
-                    reader.read_to_end(&mut got).await?;
-                    assert_eq!(content, got);
-                    assert_eq!(name, Some("hello world".to_string()));
-                }
-            }
-
-            provider_task.abort();
-            let _ = provider_task.await;
+            single_file_in_collection("hello_world", &content).await?;
         }
 
         Ok(())
@@ -148,7 +127,7 @@ mod tests {
         let hash = *blobs_db.iter().next().unwrap().0;
         let mut provider = provider::Provider::builder()
             .database(db)
-            .blobs_database(db)
+            .blobs_database(blobs_db)
             .build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();

@@ -1,9 +1,9 @@
 use std::fmt::Debug;
-use std::time::Duration;
-use std::{io::Read, net::SocketAddr, time::Instant};
+use std::time::{Duration, Instant};
+use std::{io::Read, net::SocketAddr};
 
 use anyhow::{anyhow, Result};
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
@@ -54,7 +54,7 @@ async fn setup(opts: Options) -> Result<(Client, Connection)> {
 }
 
 /// Stats about the transfer.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Stats {
     pub data_len: usize,
     pub elapsed: Duration,
@@ -86,22 +86,16 @@ pub enum Event {
 impl Debug for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Connected => write!(f, "Connected"),
-            Self::Requested { size } => f.debug_struct("Requested").field("size", size).finish(),
-            Self::Receiving {
-                hash,
-                reader: _,
-                name,
-            } => f
-                .debug_struct("Receiving")
-                .field("hash", hash)
-                .field(
-                    "reader",
-                    &"Box<dyn AsyncRead + Unpin + Sync + Send + 'static>",
+            Self::Connected => write!(f, "Event::Connected"),
+            Self::Requested { size } => write!(f, "Event::Requested {{ {size} }}"),
+            Self::Receiving { hash, name, .. } => {
+                write!(
+                    f,
+                    "Event::Receiving {{ hash: {hash}, reader: Box<AsyncReader>, name: {:#?} }}",
+                    name
                 )
-                .field("name", name)
-                .finish(),
-            Self::Done(arg0) => f.debug_tuple("Done").field(arg0).finish(),
+            }
+            Self::Done(s) => write!(f, "Event::Done({:#?})", s),
         }
     }
 }
@@ -169,10 +163,8 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                             for blob in collection.blobs {
                                 // read next message
-                                println!("{:#?}", in_buffer);
                                 match read_lp_data(&mut reader, &mut in_buffer).await? {
                                     Some(response_buffer) => {
-                                        println!("response_buffer {:#?}", response_buffer);
                                         let response: Response = postcard::from_bytes(&response_buffer)?;
                                         match response.data {
                                             // unexpected message
@@ -185,10 +177,12 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                              },
                                             // next blob in collection will be sent over
                                             Res::Found { size, outboard } => {
-                                                let (event, task) = read_and_decode_blob_data(size, outboard, hash, &mut reader).await?;
-                                                yield event;
+                                                println!("Res::Found size {size}");
+                                                let (event, task) = read_and_decode_blob_data(size, outboard, bao::Hash::from(blob.hash), Some(blob.name), &mut reader, &mut in_buffer).await?;
 
+                                                yield event;
                                                 task.await??;
+
                                             }
                                         }
                                      },
@@ -201,12 +195,13 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                         // server is sending over a single blob
                         Res::Found { size, outboard } => {
                             yield Event::Requested { size };
+                            println!("got FOUND response with data size {size}");
                             if size > MAX_DATA_SIZE {
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
                             data_len = size;
 
-                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, reader).await?;
+                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, None, reader, &mut in_buffer).await?;
                             yield event;
 
                             task.await??;
@@ -216,7 +211,9 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             Err(anyhow!("data not found"))?;
                         }
                     }
+
                     // Shut down the stream
+                    println!("shutting down stream");
                     debug!("shutting down stream");
                     writer.close().await?;
 
@@ -241,50 +238,93 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
+/// reads data into a passed in buffer, returning a buffer of length `size`, and clearing
+/// the original buffer of the already read data
+async fn read_data<R: AsyncRead + Unpin>(
     size: usize,
-    outboard: &[u8],
-    hash: bao::Hash,
     mut reader: R,
-) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
+    mut buffer: &mut BytesMut,
+) -> Result<BytesMut> {
     // TODO: avoid buffering
-    // TODO: buffer is moved into the task. would like help figuring out how to pass this in rather
-    // than re-allocating each time this fn is called
-    let mut buffer = BytesMut::with_capacity(1024);
     while buffer.len() < size {
         reader.read_buf(&mut buffer).await?;
     }
-
-    debug!("received data: {}bytes", buffer.len());
-    if size != buffer.len() {
+    if size > buffer.len() {
         Err(anyhow!(
             "expected {} bytes, got {} bytes",
             size,
             buffer.len()
         ))?;
     }
+
+    debug!("received data: {}bytes", size);
+    Ok(buffer.split_to(size))
+}
+
+async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
+    size: usize,
+    outboard: &[u8],
+    hash: bao::Hash,
+    name: Option<String>,
+    reader: R,
+    buffer: &mut BytesMut,
+) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
+    let data = read_data(size, reader, buffer).await?;
     let (a, mut b) = tokio::io::duplex(1024);
+    println!("data size: {:#?}", size);
 
     // TODO: avoid copy
     let outboard = outboard.to_vec();
     let t = tokio::task::spawn(async move {
-        let mut decoder = bao::decode::Decoder::new_outboard(
-            std::io::Cursor::new(&buffer[..]),
-            &*outboard,
-            &hash,
-        );
-
+        println!("in task...");
         let mut buf = [0u8; 1024];
+        let mut decoder =
+            bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
+
         loop {
             // TODO: avoid blocking
-            let read = decoder.read(&mut buf)?;
+            let read_res = decoder.read(&mut buf);
+            println!("read_res: {:#?}", read_res);
+            let read = read_res?;
             if read == 0 {
                 break;
             }
-            b.write_all(&buf[..read]).await?;
         }
+        // tokio::task::spawn_blocking(move || {
+        //     let mut decoder = bao::decode::Decoder::new_outboard(
+        //         std::io::Cursor::new(&data[..]),
+        //         &*outboard,
+        //         &hash,
+        //     );
+
+        //     loop {
+        //         loops += 1;
+        //         // TODO: avoid blocking
+        //         println!("decoder loop {loops}");
+        //         let read = decoder.read(&mut buf)?;
+        //         if read == 0 {
+        //             println!("break!");
+        //             break Ok::<(), anyhow::Error>(());
+        //         }
+        //         // b.write(&buf[..read]).await?;
+        //     }
+        // })
+        // .await??;
+
+        println!("about to write:");
+        // let written = b.write(&d).await?;
+        let mut written = 0;
+        while written < size {
+            let written_res = b.write(&data[written..]).await;
+            println!("written_res: {:#?}", written_res);
+            written += written_res?;
+            tokio::task::yield_now().await;
+            println!("wrote {written} so far");
+        }
+        println!("wrote {written}!");
         b.flush().await?;
         debug!("finished writing");
+        println!("finished writing");
         Ok::<(), anyhow::Error>(())
     });
 
@@ -292,7 +332,7 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
         Event::Receiving {
             hash,
             reader: Box::new(a),
-            name: None,
+            name,
         },
         t,
     ))
@@ -302,33 +342,14 @@ async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
     size: usize,
     outboard: &[u8],
     hash: bao::Hash,
-    mut reader: R,
+    reader: R,
     buffer: &mut BytesMut,
 ) -> Result<Blobs> {
-    // TODO: avoid buffering
-    if buffer.len() > size {
-        buffer.resize(size, 0u8);
-    }
-    println!("buffer len {}", buffer.len());
-    while buffer.len() < size {
-        reader.read_buf(buffer).await?;
-    }
-
-    debug!("received data: {}bytes", buffer.len());
-    if size != buffer.len() {
-        Err(anyhow!(
-            "expected {} bytes, got {} bytes",
-            size,
-            buffer.len()
-        ))?;
-    }
-
-    let mut data = BytesMut::with_capacity(size);
-
+    let data = read_data(size, reader, buffer).await?;
     // TODO: avoid copy
     let outboard = outboard.to_vec();
     let mut decoder =
-        bao::decode::Decoder::new_outboard(std::io::Cursor::new(&buffer[..]), &*outboard, &hash);
+        bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
 
     let mut buf = [0u8; 1024];
     loop {
@@ -337,7 +358,6 @@ async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
         if read == 0 {
             break;
         }
-        data.put(&buf[..read]);
     }
     let blobs: Blobs = postcard::from_bytes(&data)?;
     Ok(blobs)

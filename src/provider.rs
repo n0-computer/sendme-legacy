@@ -187,6 +187,7 @@ async fn handle_stream(
                     Some((outboard, data)) => {
                         debug!("found collection {}", name.to_hex());
 
+                        // TODO: if this doesn't decode correctly, should we send a "NotFound"?
                         let b: Blobs = postcard::from_bytes(&data)?;
 
                         write_response(
@@ -201,7 +202,8 @@ async fn handle_stream(
                         )
                         .await?;
 
-                        writer.write_all(&data).await?;
+                        let mut data = BytesMut::from(&data[..]);
+                        writer.write_buf(&mut data).await?;
                         for blob in b.blobs {
                             if SentStatus::NotFound
                                 == send_blob(
@@ -223,6 +225,7 @@ async fn handle_stream(
                     }
                 }
 
+                println!("finished response");
                 debug!("finished response");
             }
             None => {
@@ -231,7 +234,7 @@ async fn handle_stream(
         }
         in_buffer.clear();
     }
-
+    writer.close().await?;
     Ok(())
 }
 
@@ -270,7 +273,6 @@ async fn send_blob<W: AsyncWrite + Unpin>(
             let file = tokio::fs::File::open(&path).await?;
             let mut reader = tokio::io::BufReader::new(file);
             tokio::io::copy(&mut reader, &mut writer).await?;
-            println!("SENT {name}");
             Ok(SentStatus::Sent)
         }
         None => {
@@ -346,7 +348,6 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
     blobs_encoded_size_estimate += b.name.len();
     let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
     let data = postcard::to_slice(&b, &mut buffer)?;
-    println!("blobs len {}", data.len());
     let (outboard, hash) = bao::encode::outboard(&data);
     blobs_db.insert(hash, (Bytes::from(outboard), Bytes::from(data.to_vec())));
     println!("collection:\n- {}", hash.to_hex());
