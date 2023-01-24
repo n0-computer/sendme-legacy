@@ -9,7 +9,7 @@ use s2n_quic::Server as QuicServer;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tracing::{debug, warn};
 
-use crate::blobs::{Blob, Blobs};
+use crate::blobs::{Blob, Collection};
 use crate::protocol::{read_lp, write_lp, AuthToken, Handshake, Request, Res, Response, VERSION};
 use crate::tls::{self, Keypair, PeerId};
 
@@ -35,16 +35,16 @@ pub type Database = Arc<HashMap<bao::Hash, Data>>;
 /// (Outboard, Data)
 // TODO: other option is to write the blobs data to a tempfile & store
 // in the main Database. Would need to add a "list of blobs" flag to `Data`
-// to make it clear that the data would deserialize to a `ListOfBlobs` rather
+// to make it clear that the data would deserialize to a `Collection` rather
 // than representing true blob data.
-pub type BlobsDatabase = Arc<HashMap<bao::Hash, (Bytes, Bytes)>>;
+pub type CollectionDatabase = Arc<HashMap<bao::Hash, (Bytes, Bytes)>>;
 
 #[derive(Debug)]
 pub struct Provider {
     keypair: Keypair,
     auth_token: AuthToken,
     db: Database,
-    blobs_db: BlobsDatabase,
+    blobs_db: CollectionDatabase,
 }
 
 /// Builder to configure a `Provider`.
@@ -53,7 +53,7 @@ pub struct ProviderBuilder {
     auth_token: Option<AuthToken>,
     keypair: Option<Keypair>,
     db: Option<Database>,
-    blobs_db: Option<BlobsDatabase>,
+    blobs_db: Option<CollectionDatabase>,
 }
 
 impl ProviderBuilder {
@@ -75,8 +75,8 @@ impl ProviderBuilder {
         self
     }
 
-    /// Set blobs database.
-    pub fn blobs_database(mut self, db: BlobsDatabase) -> Self {
+    /// Set collection database.
+    pub fn collection_database(mut self, db: CollectionDatabase) -> Self {
         self.blobs_db = Some(db);
         self
     }
@@ -187,8 +187,7 @@ async fn handle_stream(
                     Some((outboard, data)) => {
                         debug!("found collection {}", name.to_hex());
 
-                        // TODO: if this doesn't decode correctly, should we send a "NotFound"?
-                        let b: Blobs = postcard::from_bytes(&data)?;
+                        let c: Collection = postcard::from_bytes(data)?;
 
                         write_response(
                             &mut writer,
@@ -196,7 +195,7 @@ async fn handle_stream(
                             request.id,
                             Res::FoundCollection {
                                 size: data.len(),
-                                raw_transfer_size: b.raw_size,
+                                raw_transfer_size: c.raw_size,
                                 outboard,
                             },
                         )
@@ -204,7 +203,7 @@ async fn handle_stream(
 
                         let mut data = BytesMut::from(&data[..]);
                         writer.write_buf(&mut data).await?;
-                        for blob in b.blobs {
+                        for blob in c.blobs {
                             if SentStatus::NotFound
                                 == send_blob(
                                     db.clone(),
@@ -225,7 +224,6 @@ async fn handle_stream(
                     }
                 }
 
-                println!("finished response");
                 debug!("finished response");
             }
             None => {
@@ -234,7 +232,7 @@ async fn handle_stream(
         }
         in_buffer.clear();
     }
-    writer.close().await?;
+
     Ok(())
 }
 
@@ -248,7 +246,7 @@ async fn send_blob<W: AsyncWrite + Unpin>(
     db: Arc<HashMap<bao::Hash, Data>>,
     name: bao::Hash,
     mut writer: W,
-    mut buffer: &mut BytesMut,
+    buffer: &mut BytesMut,
     id: u64,
 ) -> Result<SentStatus> {
     match db.get(&name) {
@@ -260,7 +258,7 @@ async fn send_blob<W: AsyncWrite + Unpin>(
             debug!("found {}", name.to_hex());
             write_response(
                 &mut writer,
-                &mut buffer,
+                buffer,
                 id,
                 Res::Found {
                     size: *size,
@@ -277,13 +275,13 @@ async fn send_blob<W: AsyncWrite + Unpin>(
         }
         None => {
             debug!("not found {}", name.to_hex());
-            write_response(&mut writer, &mut buffer, id, Res::NotFound).await?;
+            write_response(&mut writer, buffer, id, Res::NotFound).await?;
             Ok(SentStatus::NotFound)
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Data {
     /// Outboard data from bao.
     outboard: Bytes,
@@ -298,13 +296,14 @@ pub enum DataSource {
     File(PathBuf),
 }
 
-pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, BlobsDatabase)> {
+pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, CollectionDatabase)> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
     let mut blobs_db = HashMap::new();
     let mut blobs = Vec::new();
     let mut raw_size = 0;
+
     let mut blobs_encoded_size_estimate = 0;
     for data in data_sources {
         match data {
@@ -317,7 +316,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
                 let data = tokio::fs::read(&path).await?;
                 let (outboard, hash) = bao::encode::outboard(&data);
 
-                println!("- {}: {}bytes", hash.to_hex(), data.len());
+                println!("- {}: {} bytes", hash.to_hex(), data.len());
                 db.insert(
                     hash,
                     Data {
@@ -340,17 +339,22 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Blobs
             }
         }
     }
-    let b = Blobs {
+    let c = Collection {
         name: "collection".to_string(),
         blobs,
         raw_size,
     };
-    blobs_encoded_size_estimate += b.name.len();
+    blobs_encoded_size_estimate += c.name.len();
+
+    // NOTE: we can't use the postcard::MaxSize to estimate the encoding buffer size
+    // because the Collection and Blobs have `String` fields.
+    // So instead, we are tracking the filename + hash sizes of each blob, plus an extra 1024
+    // to account for any postcard encoding data.
     let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
-    let data = postcard::to_slice(&b, &mut buffer)?;
+    let data = postcard::to_slice(&c, &mut buffer)?;
     let (outboard, hash) = bao::encode::outboard(&data);
     blobs_db.insert(hash, (Bytes::from(outboard), Bytes::from(data.to_vec())));
-    println!("collection:\n- {}", hash.to_hex());
+    println!("\ncollection:\n- {}", hash.to_hex());
 
     Ok((Arc::new(db), Arc::new(blobs_db)))
 }
