@@ -158,6 +158,8 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
 
+                            let mut reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
+
                             // TODO: avoid buffering
 
                             // remove response buffered data
@@ -176,9 +178,6 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             // TODO: avoid copy
                             let outboard = outboard.to_vec();
                             println!("got outboard of size {}", outboard.len());
-                            reader = tokio::task::spawn_blocking(|| {
-                                reader
-                            }).await?;
                             let t = tokio::task::spawn(async move {
                                 let mut decoder = bao::decode::Decoder::new(
                                     std::io::Cursor::new(&buffer),
