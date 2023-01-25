@@ -30,21 +30,19 @@ impl Default for Options {
 const MAX_CONNECTIONS: u64 = 1024;
 const MAX_STREAMS: u64 = 10;
 
-pub type Database = Arc<HashMap<bao::Hash, Data>>;
-
-/// (Outboard, Data)
-// TODO: other option is to write the blobs data to a tempfile & store
-// in the main Database. Would need to add a "list of blobs" flag to `Data`
-// to make it clear that the data would deserialize to a `Collection` rather
-// than representing true blob data.
-pub type CollectionDatabase = Arc<HashMap<bao::Hash, (Bytes, Bytes)>>;
+pub type Database = Arc<HashMap<bao::Hash, BlobOrCollection>>;
 
 #[derive(Debug)]
 pub struct Provider {
     keypair: Keypair,
     auth_token: AuthToken,
     db: Database,
-    blobs_db: CollectionDatabase,
+}
+
+#[derive(Debug)]
+pub enum BlobOrCollection {
+    Blob(Data),
+    Collection((Bytes, Bytes)),
 }
 
 /// Builder to configure a `Provider`.
@@ -53,7 +51,6 @@ pub struct ProviderBuilder {
     auth_token: Option<AuthToken>,
     keypair: Option<Keypair>,
     db: Option<Database>,
-    blobs_db: Option<CollectionDatabase>,
 }
 
 impl ProviderBuilder {
@@ -75,22 +72,14 @@ impl ProviderBuilder {
         self
     }
 
-    /// Set collection database.
-    pub fn collection_database(mut self, db: CollectionDatabase) -> Self {
-        self.blobs_db = Some(db);
-        self
-    }
-
     /// Consumes the builder and constructs a `Provider`.
     pub fn build(self) -> Result<Provider> {
         ensure!(self.db.is_some(), "missing database");
-        ensure!(self.blobs_db.is_some(), "missing blobs database");
 
         Ok(Provider {
             auth_token: self.auth_token.unwrap_or_else(AuthToken::generate),
             keypair: self.keypair.unwrap_or_else(Keypair::generate),
             db: self.db.unwrap(),
-            blobs_db: self.blobs_db.unwrap(),
         })
     }
 }
@@ -128,15 +117,13 @@ impl Provider {
 
         while let Some(mut connection) = server.accept().await {
             let db = self.db.clone();
-            let blobs_db = self.blobs_db.clone();
             tokio::spawn(async move {
                 debug!("connection accepted from {:?}", connection.remote_addr());
 
                 while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
                     let db = db.clone();
-                    let blobs_db = blobs_db.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = handle_stream(db, token, blobs_db, stream).await {
+                        if let Err(err) = handle_stream(db, token, stream).await {
                             warn!("error: {:#?}", err);
                         }
                         debug!("disconnected");
@@ -149,12 +136,7 @@ impl Provider {
     }
 }
 
-async fn handle_stream(
-    db: Arc<HashMap<bao::Hash, Data>>,
-    token: AuthToken,
-    blob_db: Arc<HashMap<bao::Hash, (Bytes, Bytes)>>,
-    stream: BidirectionalStream,
-) -> Result<()> {
+async fn handle_stream(db: Database, token: AuthToken, stream: BidirectionalStream) -> Result<()> {
     debug!("stream opened from {:?}", stream.connection().remote_addr());
     let (mut reader, mut writer) = stream.split();
     let mut out_buffer = BytesMut::with_capacity(1024);
@@ -183,8 +165,30 @@ async fn handle_stream(
                 let name = bao::Hash::from(request.name);
                 debug!("got request({}): {}", request.id, name.to_hex());
 
-                match blob_db.get(&name) {
-                    Some((outboard, data)) => {
+                match db.get(&name) {
+                    Some(BlobOrCollection::Blob(Data {
+                        outboard,
+                        path,
+                        size,
+                    })) => {
+                        debug!("found {}", name.to_hex());
+                        write_response(
+                            &mut writer,
+                            &mut out_buffer,
+                            request.id,
+                            Res::Found {
+                                size: *size,
+                                outboard,
+                            },
+                        )
+                        .await?;
+
+                        debug!("writing data");
+                        let file = tokio::fs::File::open(&path).await?;
+                        let mut reader = tokio::io::BufReader::new(file);
+                        tokio::io::copy(&mut reader, &mut writer).await?;
+                    }
+                    Some(BlobOrCollection::Collection((outboard, data))) => {
                         debug!("found collection {}", name.to_hex());
 
                         let c: Collection = postcard::from_bytes(data)?;
@@ -219,7 +223,8 @@ async fn handle_stream(
                         }
                     }
                     None => {
-                        send_blob(db.clone(), name, &mut writer, &mut out_buffer, request.id)
+                        debug!("not found {}", name.to_hex());
+                        write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound)
                             .await?;
                     }
                 }
@@ -243,18 +248,18 @@ enum SentStatus {
 }
 
 async fn send_blob<W: AsyncWrite + Unpin>(
-    db: Arc<HashMap<bao::Hash, Data>>,
+    db: Database,
     name: bao::Hash,
     mut writer: W,
     buffer: &mut BytesMut,
     id: u64,
 ) -> Result<SentStatus> {
     match db.get(&name) {
-        Some(Data {
+        Some(BlobOrCollection::Blob(Data {
             outboard,
             path,
             size,
-        }) => {
+        })) => {
             debug!("found {}", name.to_hex());
             write_response(
                 &mut writer,
@@ -273,7 +278,7 @@ async fn send_blob<W: AsyncWrite + Unpin>(
             tokio::io::copy(&mut reader, &mut writer).await?;
             Ok(SentStatus::Sent)
         }
-        None => {
+        _ => {
             debug!("not found {}", name.to_hex());
             write_response(&mut writer, buffer, id, Res::NotFound).await?;
             Ok(SentStatus::NotFound)
@@ -296,11 +301,12 @@ pub enum DataSource {
     File(PathBuf),
 }
 
-pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, CollectionDatabase)> {
+// Creates a database of blobs (stored in outboard storage) and Collections, stored in memory.
+// Returns a the hash of the collection created by the given list of DataSources
+pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::Hash)> {
     println!("Available Data:");
 
     let mut db = HashMap::new();
-    let mut blobs_db = HashMap::new();
     let mut blobs = Vec::new();
     let mut raw_size = 0;
 
@@ -319,11 +325,11 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Colle
                 println!("- {}: {} bytes", hash.to_hex(), data.len());
                 db.insert(
                     hash,
-                    Data {
+                    BlobOrCollection::Blob(Data {
                         outboard: Bytes::from(outboard),
                         path: path.clone(),
                         size: data.len(),
-                    },
+                    }),
                 );
                 raw_size += data.len();
                 let name = path
@@ -350,10 +356,13 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Colle
     let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
     let data = postcard::to_slice(&c, &mut buffer)?;
     let (outboard, hash) = bao::encode::outboard(&data);
-    blobs_db.insert(hash, (Bytes::from(outboard), Bytes::from(data.to_vec())));
+    db.insert(
+        hash,
+        BlobOrCollection::Collection((Bytes::from(outboard), Bytes::from(data.to_vec()))),
+    );
     println!("\ncollection:\n- {}", hash.to_hex());
 
-    Ok((Arc::new(db), Arc::new(blobs_db)))
+    Ok((Arc::new(db), hash))
 }
 
 async fn write_response<W: AsyncWrite + Unpin>(

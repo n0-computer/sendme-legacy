@@ -2,8 +2,8 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use std::{io::Read, net::SocketAddr};
 
-use anyhow::{anyhow, Result};
-use bytes::BytesMut;
+use anyhow::{anyhow, Context, Result};
+use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
@@ -234,27 +234,20 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-/// reads data into a passed in buffer, returning a buffer of length `size`, and clearing
+/// reads the entire expected blob into the buffer, returning a buffer of length `size`, and clearing
 /// the original buffer of the already read data
 async fn read_data<R: AsyncRead + Unpin>(
     size: usize,
     mut reader: R,
     mut buffer: &mut BytesMut,
-) -> Result<BytesMut> {
+) -> Result<Bytes> {
     // TODO: avoid buffering
     while buffer.len() < size {
         reader.read_buf(&mut buffer).await?;
     }
-    if size > buffer.len() {
-        Err(anyhow!(
-            "expected {} bytes, got {} bytes",
-            size,
-            buffer.len()
-        ))?;
-    }
 
     debug!("received data: {}bytes", size);
-    Ok(buffer.split_to(size))
+    Ok(buffer.split_to(size).freeze())
 }
 
 async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
@@ -265,19 +258,23 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
     reader: R,
     buffer: &mut BytesMut,
 ) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
+    // reads entire blob into buffer :(
     let data = read_data(size, reader, buffer).await?;
     let (a, mut b) = tokio::io::duplex(1024);
 
     // TODO: avoid copy
     let outboard = outboard.to_vec();
     let t = tokio::task::spawn(async move {
+        // verify content of data matches the expected hash
         let mut decoder =
             bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
 
         let mut buf = [0u8; 1024];
         loop {
-            // TODO: avoid blocking
-            let read = decoder.read(&mut buf)?;
+            // TODO: write & use an `async decoder`
+            let read = decoder
+                .read(&mut buf)
+                .context("hash of Collection data does not match")?;
             if read == 0 {
                 break;
             }
@@ -305,20 +302,25 @@ async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
     reader: R,
     buffer: &mut BytesMut,
 ) -> Result<Collection> {
+    // reads entire blob into buffer :(
     let data = read_data(size, reader, buffer).await?;
     // TODO: avoid copy
     let outboard = outboard.to_vec();
+    // verify that the content of data matches the expected hash
     let mut decoder =
         bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
 
     let mut buf = [0u8; 1024];
     loop {
-        // TODO: avoid blocking
-        let read = decoder.read(&mut buf)?;
+        // TODO: write & use an `async decoder`
+        let read = decoder
+            .read(&mut buf)
+            .context("hash of Collection data does not match")?;
         if read == 0 {
             break;
         }
     }
-    let c: Collection = postcard::from_bytes(&data)?;
+    let c: Collection =
+        postcard::from_bytes(&data).context("failed to serialize Collection data")?;
     Ok(c)
 }
