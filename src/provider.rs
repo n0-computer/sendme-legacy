@@ -156,6 +156,9 @@ async fn handle_stream(
                         let path = path.clone();
                         let outboard = outboard.clone();
                         let size = *size;
+                        // need to thread the writer though the spawn_blocking, since
+                        // taking a reference does not work. spawn_blocking requires
+                        // 'static lifetime.
                         writer = tokio::task::spawn_blocking(move || {
                             let file_reader = std::fs::File::open(&path)?;
                             let outboard_reader = std::io::Cursor::new(outboard);
@@ -166,8 +169,7 @@ async fn handle_stream(
                                 0,
                                 size as u64,
                             );
-                            let copied = std::io::copy(&mut slice_extractor, &mut wrapper)?;
-                            println!("copied {} bytes", copied);
+                            let _copied = std::io::copy(&mut slice_extractor, &mut wrapper)?;
                             std::io::Result::Ok(writer)
                         })
                         .await

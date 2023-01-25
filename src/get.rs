@@ -2,13 +2,14 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{io::Read, net::SocketAddr, time::Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Context};
 use bytes::BytesMut;
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio_util::io::SyncIoBridge;
 use tracing::debug;
 
 use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
@@ -158,45 +159,41 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
 
-                            let mut reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
+                            // let expected = u64::try_from(bao::encode::encoded_size(size as u64)).unwrap();
+                            let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
 
-                            // TODO: avoid buffering
+                            // // TODO: avoid buffering
 
-                            // remove response buffered data
-                            println!("getting data of size {}", size);
-                            let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
-                            println!("expecting {}", expected);
-                            let buffer = read_n(&mut reader, expected).await?;
-                            println!("received data: {} bytes", buffer.len());
+                            // // remove response buffered data
+                            // println!("getting data of size {}", size);
+                            // let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
+                            // println!("expecting {}", expected);
+                            // let buffer = read_n(&mut reader, expected).await?;
+                            // println!("received data: {} bytes", buffer.len());
 
-                            if expected != buffer.len() {
-                                Err(anyhow!("expected {} bytes, got {} bytes", expected, buffer.len()))?;
-                            }
-                            println!("got {}", buffer.len());
-                            let (a, mut b) = tokio::io::duplex(1024);
+                            // if expected != buffer.len() {
+                            //     Err(anyhow!("expected {} bytes, got {} bytes", expected, buffer.len()))?;
+                            // }
+                            // println!("got {}", buffer.len());
+                            let (a, b) = tokio::io::duplex(1024);
 
                             // TODO: avoid copy
                             let outboard = outboard.to_vec();
                             println!("got outboard of size {}", outboard.len());
-                            let t = tokio::task::spawn(async move {
+                            let t = tokio::task::spawn_blocking(move || {
+                                let reader = SyncIoBridge::new(reader);
                                 let mut decoder = bao::decode::Decoder::new(
-                                    std::io::Cursor::new(&buffer),
+                                    reader,
                                     &hash,
                                 );
 
-
-                                let mut buf = [0u8; 1024];
-                                loop {
-                                    // TODO: avoid blocking
-                                    let read = decoder.read(&mut buf)?;
-                                    if read == 0 {
-                                        break;
-                                    }
-                                    b.write_all(&buf[..read]).await?;
+                                let mut writer = SyncIoBridge::new(b);
+                                let n = std::io::copy(&mut decoder, &mut writer).context("copy failure")?;
+                                let size = size as u64;
+                                if n < size {
+                                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
                                 }
-                                b.flush().await?;
-                                debug!("finished writing");
-                                Ok::<(), anyhow::Error>(())
+                                anyhow::Ok(())
                             });
 
                             yield Event::Receiving { hash, reader: Box::new(a) };
