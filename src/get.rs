@@ -177,7 +177,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                              },
                                             // next blob in collection will be sent over
                                             Res::Found { size, outboard } => {
-                                                let (event, task) = read_and_decode_blob_data(size, outboard, bao::Hash::from(blob.hash), Some(blob.name), &mut reader, &mut in_buffer).await?;
+                                                let (event, task) = read_and_decode_blob_data(size, outboard, blob.hash, Some(blob.name), &mut reader, &mut in_buffer).await?;
 
                                                 yield event;
                                                 task.await??;

@@ -207,7 +207,7 @@ async fn handle_stream(
                             if SentStatus::NotFound
                                 == send_blob(
                                     db.clone(),
-                                    bao::Hash::from(blob.hash),
+                                    blob.hash,
                                     &mut writer,
                                     &mut out_buffer,
                                     request.id,
@@ -332,10 +332,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, Colle
                     .unwrap_or_default()
                     .to_string();
                 blobs_encoded_size_estimate += name.len() + 32;
-                blobs.push(Blob {
-                    name,
-                    hash: hash.into(),
-                });
+                blobs.push(Blob { name, hash });
             }
         }
     }
