@@ -7,6 +7,7 @@ use bytes::{Bytes, BytesMut};
 use s2n_quic::stream::BidirectionalStream;
 use s2n_quic::Server as QuicServer;
 use tokio::io::AsyncWrite;
+use tokio_util::io::SyncIoBridge;
 use tracing::{debug, warn};
 
 use crate::protocol::{read_lp, write_lp, AuthToken, Handshake, Request, Res, Response, VERSION};
@@ -144,7 +145,7 @@ async fn handle_stream(
                             request.id,
                             Res::Found {
                                 size: *size,
-                                outboard,
+                                outboard: &[],
                             },
                         )
                         .await?;
@@ -152,6 +153,25 @@ async fn handle_stream(
                         debug!("writing data");
                         let file = tokio::fs::File::open(&path).await?;
                         let mut reader = tokio::io::BufReader::new(file);
+                        let path = path.clone();
+                        let outboard = outboard.clone();
+                        let size = *size;
+                        writer = tokio::task::spawn_blocking(move || {
+                            let file_reader = std::fs::File::open(&path)?;
+                            let outboard_reader = std::io::Cursor::new(outboard);
+                            let mut wrapper = SyncIoBridge::new(&mut writer);
+                            let mut slice_extractor = bao::encode::SliceExtractor::new_outboard(
+                                file_reader,
+                                outboard_reader,
+                                0,
+                                size as u64,
+                            );
+                            let copied = std::io::copy(&mut slice_extractor, &mut wrapper)?;
+                            println!("copied {} bytes", copied);
+                            std::io::Result::Ok(writer)
+                        })
+                        .await
+                        .unwrap()?;
                         tokio::io::copy(&mut reader, &mut writer).await?;
                     }
                     None => {

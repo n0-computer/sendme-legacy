@@ -98,6 +98,12 @@ impl Debug for Event {
     }
 }
 
+async fn read_n(mut reader: impl AsyncRead + Unpin, size: usize) -> tokio::io::Result<Vec<u8>> {
+    let mut buffer = vec![0u8; size];
+    reader.read_exact(buffer.as_mut_slice()).await.unwrap();
+    Ok(buffer)
+}
+
 pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item = Result<Event>> {
     async_stream::try_stream! {
         let now = Instant::now();
@@ -155,22 +161,27 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             // TODO: avoid buffering
 
                             // remove response buffered data
-                            while in_buffer.len() < size {
-                                reader.read_buf(&mut in_buffer).await?;
-                            }
+                            println!("getting data of size {}", size);
+                            let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
+                            println!("expecting {}", expected);
+                            let buffer = read_n(&mut reader, expected).await?;
+                            println!("received data: {} bytes", buffer.len());
 
-                            debug!("received data: {}bytes", in_buffer.len());
-                            if size != in_buffer.len() {
-                                Err(anyhow!("expected {} bytes, got {} bytes", size, in_buffer.len()))?;
+                            if expected != buffer.len() {
+                                Err(anyhow!("expected {} bytes, got {} bytes", expected, buffer.len()))?;
                             }
+                            println!("got {}", buffer.len());
                             let (a, mut b) = tokio::io::duplex(1024);
 
                             // TODO: avoid copy
                             let outboard = outboard.to_vec();
+                            println!("got outboard of size {}", outboard.len());
+                            reader = tokio::task::spawn_blocking(|| {
+                                reader
+                            }).await?;
                             let t = tokio::task::spawn(async move {
-                                let mut decoder = bao::decode::Decoder::new_outboard(
-                                    std::io::Cursor::new(&in_buffer[..]),
-                                    &*outboard,
+                                let mut decoder = bao::decode::Decoder::new(
+                                    std::io::Cursor::new(&buffer),
                                     &hash,
                                 );
 
