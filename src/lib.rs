@@ -49,15 +49,11 @@ mod tests {
             }
         };
 
-        let (db, collection_db) =
+        let (db, collection_hash) =
             provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
         // hash of the whole collection
-        let collection_hash = *collection_db.iter().next().unwrap().0;
         let addr = format!("127.0.0.1:{port}").parse().unwrap();
-        let mut provider = provider::Provider::builder()
-            .database(db)
-            .collection_database(collection_db)
-            .build()?;
+        let mut provider = provider::Provider::builder().database(db).build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 
@@ -135,14 +131,10 @@ mod tests {
             expects.push((Some(name.to_string()), path, hash));
         }
 
-        let (db, collection_db) = provider::create_db(files).await?;
+        let (db, collection_hash) = provider::create_db(files).await?;
         // hash of the whole collection
-        let collection_hash = *collection_db.iter().next().unwrap().0;
         let addr = "127.0.0.1:4446".parse().unwrap();
-        let mut provider = provider::Provider::builder()
-            .database(db)
-            .collection_database(collection_db)
-            .build()?;
+        let mut provider = provider::Provider::builder().database(db).build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 
@@ -222,13 +214,8 @@ mod tests {
         let (_, expect_hash) = bao::encode::outboard(&data);
         let expect_name = Some(filename.to_string());
 
-        let (db, collection_db) =
-            provider::create_db(vec![provider::DataSource::File(path)]).await?;
-        let hash = *collection_db.iter().next().unwrap().0;
-        let mut provider = provider::Provider::builder()
-            .database(db)
-            .collection_database(collection_db)
-            .build()?;
+        let (db, hash) = provider::create_db(vec![provider::DataSource::File(path)]).await?;
+        let mut provider = provider::Provider::builder().database(db).build()?;
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 

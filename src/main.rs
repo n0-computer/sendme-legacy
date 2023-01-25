@@ -156,7 +156,9 @@ async fn main() -> Result<()> {
 
                         if let Some(ref outpath) = out {
                             let name = name.map_or_else(|| hash.to_string(), |n| n);
-                            tokio::fs::create_dir_all(outpath).await?;
+                            tokio::fs::create_dir_all(outpath)
+                                .await
+                                .context("Unable to create directory {outpath}")?;
                             let dirpath = std::path::PathBuf::from(outpath);
                             let filepath = dirpath.join(name);
                             let (temp_file, dup) = tokio::task::spawn_blocking(|| {
@@ -212,15 +214,12 @@ async fn main() -> Result<()> {
                 vec![provider::DataSource::File(path_buf)]
             };
 
-            let (db, collection_db) = provider::create_db(sources).await?;
+            let (db, _) = provider::create_db(sources).await?;
             let mut opts = provider::Options::default();
             if let Some(addr) = addr {
                 opts.addr = addr;
             }
-            let mut provider_builder = provider::Provider::builder()
-                .database(db)
-                .collection_database(collection_db)
-                .keypair(keypair);
+            let mut provider_builder = provider::Provider::builder().database(db).keypair(keypair);
             if let Some(ref hex) = auth_token {
                 let auth_token = AuthToken::from_str(hex)?;
                 provider_builder = provider_builder.auth_token(auth_token);
