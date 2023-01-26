@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use std::{io::Read, net::SocketAddr};
 
 use anyhow::{anyhow, Context, Result};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
@@ -169,33 +169,14 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                             // expect to get blob data in the order they appear in the collection
                             for blob in collection.blobs {
-                                // read next message
-                                match read_lp_data(&mut reader, &mut in_buffer).await? {
-                                    Some(response_buffer) => {
-                                        let response: Response = postcard::from_bytes(&response_buffer)?;
-                                        match response.data {
-                                            // unexpected message
-                                            Res::FoundCollection { .. } => {
-                                                Err(anyhow!("Unexpected message from provider. Ending transfer early."))?;
-                                            },
-                                            // blob data not found
-                                            Res::NotFound => {
-                                                Err(anyhow!("data for {} not found", bao::Hash::from(blob.hash).to_hex()))?;
-                                             },
-                                            // next blob in collection will be sent over
-                                            Res::Found { size, outboard } => {
-                                                let (event, task) = read_and_decode_blob_data(size, outboard, blob.hash, Some(blob.name), &mut reader, &mut in_buffer).await?;
+                                let (blob_reader, task) = handle_blob_response(blob.hash, &mut reader, &mut in_buffer).await?;
+                                yield Event::Receiving {
+                                    hash: blob.hash,
+                                    reader: blob_reader,
+                                    name: Some(blob.name),
+                                };
 
-                                                yield event;
-                                                task.await??;
-
-                                            }
-                                        }
-                                     },
-                                     None => {
-                                        Err(anyhow!("server disconnected"))?;
-                                     }
-                                }
+                                task.await??;
                             }
                         }
 
@@ -237,16 +218,52 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-async fn read_and_decode_blob_data<R: AsyncRead + futures::io::AsyncRead + Unpin>(
-    size: u64,
+// Read next response, and if `Res::Found`, reads the next blob of data off the reader.
+// Returns an `AsyncReader` and a `JoinHandle`.
+// The `JoinHandle` task must be `await`-ed to begin decoding the blob data and writing the
+// verified data to the `AsyncReader`.
+async fn handle_blob_response<'a, R: AsyncRead + futures::io::AsyncRead + Unpin>(
+    hash: bao::Hash,
+    mut reader: R,
+    buffer: &mut BytesMut,
+) -> Result<(
+    Box<dyn AsyncRead + Unpin + Sync + Send + 'static>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
+    match read_lp_data(&mut reader, buffer).await? {
+        Some(response_buffer) => {
+            let response: Response = postcard::from_bytes(&response_buffer)?;
+            match response.data {
+                // unexpected message
+                Res::FoundCollection { .. } => Err(anyhow!(
+                    "Unexpected message from provider. Ending transfer early."
+                ))?,
+                // blob data not found
+                Res::NotFound => Err(anyhow!("data for {} not found", hash.to_hex()))?,
+                // next blob in collection will be sent over
+                Res::Found { size, outboard } => {
+                    // reads entire blob into buffer :(
+                    let data = read_size_data(size, &mut reader, buffer).await?;
+                    decode_data_to_reader(data, outboard, hash).await
+                }
+            }
+        }
+        None => Err(anyhow!("server disconnected"))?,
+    }
+}
+
+// Returns an `AsyncRead` and a `JoinHandle`.
+// The `JoinHandle` task must be `await`-ed to begin decoding the given data and writing the
+// verified data to the `AsyncRead`er.
+async fn decode_data_to_reader(
+    data: Bytes,
     outboard: &[u8],
     hash: bao::Hash,
-    name: Option<String>,
-    reader: R,
-    buffer: &mut BytesMut,
-) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
-    // reads entire blob into buffer :(
-    let data = read_size_data(size, reader, buffer).await?;
+) -> Result<(
+    Box<dyn AsyncRead + Unpin + Sync + Send + 'static>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
+    println!("decoding theses bytes: {:?}", data);
     let (a, mut b) = tokio::io::duplex(1024);
 
     // TODO: avoid copy
@@ -272,12 +289,5 @@ async fn read_and_decode_blob_data<R: AsyncRead + futures::io::AsyncRead + Unpin
         Ok::<(), anyhow::Error>(())
     });
 
-    Ok((
-        Event::Receiving {
-            hash,
-            reader: Box::new(a),
-            name,
-        },
-        t,
-    ))
+    Ok((Box::new(a), t))
 }

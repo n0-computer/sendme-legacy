@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
                                 )
                                 .progress_chars("#>-"),
                         );
-                        pb.set_length(size as u64);
+                        pb.set_length(size);
                         pb.set_draw_target(ProgressDrawTarget::stderr());
                     }
                     get::Event::Receiving {
