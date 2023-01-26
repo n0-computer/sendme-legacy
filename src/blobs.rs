@@ -5,7 +5,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub(crate) struct Collection {
+pub struct Collection {
+    ///
     /// The name of this collection
     pub(crate) name: String,
     /// Links to the blobs in this collection
@@ -35,6 +36,18 @@ impl Collection {
         let c: Collection =
             postcard::from_bytes(&data).context("failed to serialize Collection data")?;
         Ok(c)
+    }
+
+    pub fn total_blobs_size(&self) -> u64 {
+        self.total_blobs_size
+    }
+
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    pub fn total_entries(&self) -> u64 {
+        self.blobs.len() as u64
     }
 }
 
@@ -67,7 +80,7 @@ mod hash_serde {
             type Value = bao::Hash;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("an array of bytes containing hash data")
+                formatter.write_str("an array of 32 bytes containing hash data")
             }
 
             fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>

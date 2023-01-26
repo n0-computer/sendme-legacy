@@ -172,6 +172,8 @@ async fn handle_stream(db: Database, token: AuthToken, stream: BidirectionalStre
 
                         let c: Collection = postcard::from_bytes(data)?;
 
+                        // TODO: we should check if the blobs referenced in this container
+                        // actually exist in this provider before returning `FoundCollection`
                         write_response(
                             &mut writer,
                             &mut out_buffer,
@@ -334,10 +336,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
     // So instead, we are tracking the filename + hash sizes of each blob, plus an extra 1024
     // to account for any postcard encoding data.
     let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
-    println!("before {:#?}", c);
     let data = postcard::to_slice(&c, &mut buffer)?;
-    let c: Collection = postcard::from_bytes(data)?;
-    println!("after {:#?}", c);
     let (outboard, hash) = bao::encode::outboard(&data);
     db.insert(
         hash,

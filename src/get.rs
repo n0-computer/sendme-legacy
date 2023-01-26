@@ -67,11 +67,8 @@ pub struct Stats {
 pub enum Event {
     /// The connection to the provider was established.
     Connected,
-    /// The provider has the content.
-    Requested {
-        /// The size of the requested content.
-        size: u64,
-    },
+    /// The provider has the Collection.
+    ReceivedCollection(Collection),
     /// Content is being received.
     Receiving {
         /// The hash of the content we received.
@@ -89,7 +86,9 @@ impl Debug for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Connected => write!(f, "Event::Connected"),
-            Self::Requested { size } => write!(f, "Event::Requested {{ {size} }}"),
+            Self::ReceivedCollection(c) => {
+                write!(f, "Event::ReceivedCollection({:#?})", c)
+            }
             Self::Receiving { hash, name, .. } => {
                 write!(
                     f,
@@ -159,13 +158,14 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             }
                             data_len = total_blobs_size;
 
-                            yield Event::Requested { size: total_blobs_size };
 
                             // read entire collection data into buffer :(
                             let data = read_size_data(size, &mut reader, &mut in_buffer).await?;
 
                             // decode the collection
                             let collection = Collection::decode_from(data, outboard, hash).await?;
+
+                            yield Event::ReceivedCollection(collection.clone());
 
                             // expect to get blob data in the order they appear in the collection
                             for blob in collection.blobs {
@@ -218,10 +218,10 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-// Read next response, and if `Res::Found`, reads the next blob of data off the reader.
-// Returns an `AsyncReader` and a `JoinHandle`.
-// The `JoinHandle` task must be `await`-ed to begin decoding the blob data and writing the
-// verified data to the `AsyncReader`.
+/// Read next response, and if `Res::Found`, reads the next blob of data off the reader.
+/// Returns an `AsyncReader` and a `JoinHandle`.
+/// The `JoinHandle` task must be `await`-ed to begin decoding the blob data and writing the
+/// verified data to the `AsyncReader`.
 async fn handle_blob_response<'a, R: AsyncRead + futures::io::AsyncRead + Unpin>(
     hash: bao::Hash,
     mut reader: R,
@@ -252,9 +252,9 @@ async fn handle_blob_response<'a, R: AsyncRead + futures::io::AsyncRead + Unpin>
     }
 }
 
-// Returns an `AsyncRead` and a `JoinHandle`.
-// The `JoinHandle` task must be `await`-ed to begin decoding the given data and writing the
-// verified data to the `AsyncRead`er.
+/// Returns an `AsyncRead` and a `JoinHandle`.
+/// The `JoinHandle` task must be `await`-ed to begin decoding the given data and writing the
+/// verified data to the `AsyncRead`er.
 async fn decode_data_to_reader(
     data: Bytes,
     outboard: &[u8],
@@ -263,7 +263,6 @@ async fn decode_data_to_reader(
     Box<dyn AsyncRead + Unpin + Sync + Send + 'static>,
     tokio::task::JoinHandle<Result<()>>,
 )> {
-    println!("decoding theses bytes: {:?}", data);
     let (a, mut b) = tokio::io::duplex(1024);
 
     // TODO: avoid copy

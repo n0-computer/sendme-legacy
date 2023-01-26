@@ -130,9 +130,17 @@ async fn main() -> Result<()> {
                         out_writer
                             .println(format!("{} Requesting ...", style("[2/3]").bold().dim()));
                     }
-                    get::Event::Requested { size } => {
-                        out_writer
-                            .println(format!("{} Downloading ...", style("[3/3]").bold().dim()));
+                    get::Event::ReceivedCollection(collection) => {
+                        let name = collection.name();
+                        let total_entries = collection.total_entries();
+                        let size = collection.total_blobs_size();
+                        out_writer.println(format!(
+                            "{} Downloading {name}...",
+                            style("[3/3]").bold().dim()
+                        ));
+                        out_writer.println(format!(
+                            "  {total_entries} file(s) with total transfer size {size}"
+                        ));
                         pb.set_style(
                             ProgressStyle::with_template(PROGRESS_STYLE)
                                 .unwrap()
