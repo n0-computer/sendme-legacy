@@ -198,8 +198,8 @@ async fn handle_stream(db: Database, token: AuthToken, stream: BidirectionalStre
                             &mut out_buffer,
                             request.id,
                             Res::FoundCollection {
-                                size: data.len(),
-                                raw_transfer_size: c.raw_size,
+                                size: data.len() as u64,
+                                total_blobs_size: c.total_blobs_size,
                                 outboard,
                             },
                         )
@@ -293,7 +293,7 @@ pub struct Data {
     /// Path to the original data, which must not change while in use.
     path: PathBuf,
     /// Size of the original data.
-    size: usize,
+    size: u64,
 }
 
 #[derive(Debug)]
@@ -301,14 +301,15 @@ pub enum DataSource {
     File(PathBuf),
 }
 
-// Creates a database of blobs (stored in outboard storage) and Collections, stored in memory.
-// Returns a the hash of the collection created by the given list of DataSources
+/// Creates a database of blobs (stored in outboard storage) and Collections, stored in memory.
+/// Returns a the hash of the collection created by the given list of DataSources
 pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::Hash)> {
     println!("Available Data:");
 
-    let mut db = HashMap::new();
-    let mut blobs = Vec::new();
-    let mut raw_size = 0;
+    // +1 is for the collection itself
+    let mut db = HashMap::with_capacity(data_sources.len() + 1);
+    let mut blobs = Vec::with_capacity(data_sources.len());
+    let mut total_blobs_size: u64 = 0;
 
     let mut blobs_encoded_size_estimate = 0;
     for data in data_sources {
@@ -328,10 +329,10 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
                     BlobOrCollection::Blob(Data {
                         outboard: Bytes::from(outboard),
                         path: path.clone(),
-                        size: data.len(),
+                        size: data.len() as u64,
                     }),
                 );
-                raw_size += data.len();
+                total_blobs_size += data.len() as u64;
                 let name = path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -345,7 +346,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
     let c = Collection {
         name: "collection".to_string(),
         blobs,
-        raw_size,
+        total_blobs_size,
     };
     blobs_encoded_size_estimate += c.name.len();
 
@@ -354,7 +355,10 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
     // So instead, we are tracking the filename + hash sizes of each blob, plus an extra 1024
     // to account for any postcard encoding data.
     let mut buffer = BytesMut::zeroed(blobs_encoded_size_estimate + 1024);
+    println!("before {:#?}", c);
     let data = postcard::to_slice(&c, &mut buffer)?;
+    let c: Collection = postcard::from_bytes(data)?;
+    println!("after {:#?}", c);
     let (outboard, hash) = bao::encode::outboard(&data);
     db.insert(
         hash,

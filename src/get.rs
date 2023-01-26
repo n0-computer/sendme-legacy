@@ -15,7 +15,7 @@ use crate::blobs::Collection;
 use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
 use crate::tls::{self, Keypair, PeerId};
 
-const MAX_DATA_SIZE: usize = 1024 * 1024 * 1024;
+const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -56,7 +56,7 @@ async fn setup(opts: Options) -> Result<(Client, Connection)> {
 /// Stats about the transfer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stats {
-    pub data_len: usize,
+    pub data_len: u64,
     pub elapsed: Duration,
     pub mbits: f64,
 }
@@ -68,7 +68,7 @@ pub enum Event {
     /// The provider has the content.
     Requested {
         /// The size of the requested content.
-        size: usize,
+        size: u64,
     },
     /// Content is being received.
     Receiving {
@@ -149,18 +149,17 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
                         // server is sending over a collection of blobs
-                        Res::FoundCollection { size, outboard, raw_transfer_size } => {
-                            if raw_transfer_size > MAX_DATA_SIZE {
+                        Res::FoundCollection { size, outboard, total_blobs_size } => {
+                            if total_blobs_size > MAX_DATA_SIZE {
 
-                                Err(anyhow!("size too large: {} > {}", raw_transfer_size, MAX_DATA_SIZE))?;
+                                Err(anyhow!("size too large: {} > {}", total_blobs_size, MAX_DATA_SIZE))?;
                             }
-                            data_len = raw_transfer_size;
+                            data_len = total_blobs_size;
 
-                            yield Event::Requested { size: raw_transfer_size };
+                            yield Event::Requested { size: total_blobs_size };
 
                             // decode the collection
                             let collection = read_and_decode_collection_data(size, outboard, hash, &mut reader, &mut in_buffer).await?;
-
                             for blob in collection.blobs {
                                 // read next message
                                 match read_lp_data(&mut reader, &mut in_buffer).await? {
@@ -237,21 +236,22 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 /// reads the entire expected blob into the buffer, returning a buffer of length `size`, and clearing
 /// the original buffer of the already read data
 async fn read_data<R: AsyncRead + Unpin>(
-    size: usize,
+    size: u64,
     mut reader: R,
     mut buffer: &mut BytesMut,
 ) -> Result<Bytes> {
     // TODO: avoid buffering
-    while buffer.len() < size {
+    while (buffer.len() as u64) < size {
         reader.read_buf(&mut buffer).await?;
     }
 
     debug!("received data: {}bytes", size);
-    Ok(buffer.split_to(size).freeze())
+    // potential truncation from u64 to usize
+    Ok(buffer.split_to(size as usize).freeze())
 }
 
 async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
-    size: usize,
+    size: u64,
     outboard: &[u8],
     hash: bao::Hash,
     name: Option<String>,
@@ -296,7 +296,7 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
 }
 
 async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
-    size: usize,
+    size: u64,
     outboard: &[u8],
     hash: bao::Hash,
     reader: R,
