@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
                                 .context("Failed to write output file")?;
                         } else {
                             // Write to STDOUT
-                            let mut stdout = tokio::io::stdout();
+                            let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
                             tokio::io::copy(&mut reader, &mut stdout).await?;
                         }
                     }

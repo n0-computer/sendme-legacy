@@ -111,7 +111,6 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
         yield Event::Connected;
 
-
         let mut out_buffer = BytesMut::zeroed(std::cmp::max(
             Request::POSTCARD_MAX_SIZE,
             Handshake::POSTCARD_MAX_SIZE,
