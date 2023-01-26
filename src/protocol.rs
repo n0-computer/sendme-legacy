@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Result};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -110,21 +110,33 @@ pub async fn read_lp<'a, R: AsyncRead + futures::io::AsyncRead + Unpin, T: Deser
     Ok(Some((response, size)))
 }
 
-/// Read and deserialize into the given type from the provided source, based on the length prefix.
-pub async fn read_lp_data<R: AsyncRead + futures::io::AsyncRead + Unpin>(
+/// Return a buffer for the data, based on a given size, from the given source.
+/// The new buffer is split off from the buffer that is passed into the function.
+pub async fn read_size_data<R: AsyncRead + futures::io::AsyncRead + Unpin>(
+    size: u64,
     mut reader: R,
     buffer: &mut BytesMut,
-) -> Result<Option<BytesMut>> {
-    // read length prefix
-    let size = read_prefix(&mut reader, buffer).await?;
-
-    while buffer.len() < size {
+) -> Result<Bytes> {
+    while (buffer.len() as u64) < size {
         debug!("reading data, buffered {} of {size}", buffer.len());
         if reader.read_buf(buffer).await? == 0 {
             bail!("no more data available");
         }
     }
-    let response = buffer.split_to(size);
+    // potential truncation from u64 to usize
+    Ok(buffer.split_to(size as usize).freeze())
+}
+
+/// Return a buffer of the data, based on the length prefix, from the given source.
+/// The new buffer is split off from the buffer that is passed in the function.
+pub async fn read_lp_data<R: AsyncRead + futures::io::AsyncRead + Unpin>(
+    mut reader: R,
+    buffer: &mut BytesMut,
+) -> Result<Option<Bytes>> {
+    // read length prefix
+    let size = read_prefix(&mut reader, buffer).await?;
+
+    let response = read_size_data(size as u64, reader, buffer).await?;
     Ok(Some(response))
 }
 

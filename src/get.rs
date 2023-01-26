@@ -3,16 +3,18 @@ use std::time::{Duration, Instant};
 use std::{io::Read, net::SocketAddr};
 
 use anyhow::{anyhow, Context, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWriteExt};
 use tracing::debug;
 
 use crate::blobs::Collection;
-use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
+use crate::protocol::{
+    read_lp_data, read_size_data, write_lp, AuthToken, Handshake, Request, Res, Response,
+};
 use crate::tls::{self, Keypair, PeerId};
 
 const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
@@ -148,6 +150,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                 Some(response_buffer) => {
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
+
                         // server is sending over a collection of blobs
                         Res::FoundCollection { size, outboard, total_blobs_size } => {
                             if total_blobs_size > MAX_DATA_SIZE {
@@ -158,8 +161,13 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                             yield Event::Requested { size: total_blobs_size };
 
+                            // read entire collection data into buffer :(
+                            let data = read_size_data(size, &mut reader, &mut in_buffer).await?;
+
                             // decode the collection
-                            let collection = read_and_decode_collection_data(size, outboard, hash, &mut reader, &mut in_buffer).await?;
+                            let collection = Collection::decode_from(data, outboard, hash).await?;
+
+                            // expect to get blob data in the order they appear in the collection
                             for blob in collection.blobs {
                                 // read next message
                                 match read_lp_data(&mut reader, &mut in_buffer).await? {
@@ -190,12 +198,14 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 }
                             }
                         }
-                        // server is sending over a single blob
+
+                        // unexpected message
                         Res::Found { .. } => {
                             // we should only receive `Res::FoundCollection` or `Res::NotFound` from the
                             // provider at this point in the exchange
                             Err(anyhow!("Unexpected message from provider. Ending transfer early."))?;
                         }
+
                         // data associated with the hash is not found
                         Res::NotFound => {
                             Err(anyhow!("data not found"))?;
@@ -227,24 +237,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
     }
 }
 
-/// reads the entire expected blob into the buffer, returning a buffer of length `size`, and clearing
-/// the original buffer of the already read data
-async fn read_data<R: AsyncRead + Unpin>(
-    size: u64,
-    mut reader: R,
-    mut buffer: &mut BytesMut,
-) -> Result<Bytes> {
-    // TODO: avoid buffering
-    while (buffer.len() as u64) < size {
-        reader.read_buf(&mut buffer).await?;
-    }
-
-    debug!("received data: {}bytes", size);
-    // potential truncation from u64 to usize
-    Ok(buffer.split_to(size as usize).freeze())
-}
-
-async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
+async fn read_and_decode_blob_data<R: AsyncRead + futures::io::AsyncRead + Unpin>(
     size: u64,
     outboard: &[u8],
     hash: bao::Hash,
@@ -253,7 +246,7 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
     buffer: &mut BytesMut,
 ) -> Result<(Event, tokio::task::JoinHandle<Result<()>>)> {
     // reads entire blob into buffer :(
-    let data = read_data(size, reader, buffer).await?;
+    let data = read_size_data(size, reader, buffer).await?;
     let (a, mut b) = tokio::io::duplex(1024);
 
     // TODO: avoid copy
@@ -287,34 +280,4 @@ async fn read_and_decode_blob_data<R: AsyncRead + Unpin>(
         },
         t,
     ))
-}
-
-async fn read_and_decode_collection_data<R: AsyncRead + Unpin>(
-    size: u64,
-    outboard: &[u8],
-    hash: bao::Hash,
-    reader: R,
-    buffer: &mut BytesMut,
-) -> Result<Collection> {
-    // reads entire blob into buffer :(
-    let data = read_data(size, reader, buffer).await?;
-    // TODO: avoid copy
-    let outboard = outboard.to_vec();
-    // verify that the content of data matches the expected hash
-    let mut decoder =
-        bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
-
-    let mut buf = [0u8; 1024];
-    loop {
-        // TODO: write & use an `async decoder`
-        let read = decoder
-            .read(&mut buf)
-            .context("hash of Collection data does not match")?;
-        if read == 0 {
-            break;
-        }
-    }
-    let c: Collection =
-        postcard::from_bytes(&data).context("failed to serialize Collection data")?;
-    Ok(c)
 }
