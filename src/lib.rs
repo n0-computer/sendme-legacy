@@ -24,68 +24,16 @@ mod tests {
 
     #[tokio::test]
     async fn basics() -> Result<()> {
-        let filename = "hello_world";
         let port: u16 = 4443;
-        single_file(filename, "hello world!".as_bytes(), port).await
-    }
-
-    // Run the test for a single file, with the option to transfer it as part of a collection or on
-    // its own
-    // TODO: use random ports
-    async fn single_file(filename: &str, data: &[u8], port: u16) -> Result<()> {
-        let dir: PathBuf = testdir!();
-        let path = dir.join(filename);
-        let (_, expect_hash) = bao::encode::outboard(data);
-        tokio::fs::write(&path, data).await?;
-
-        // hash of the transfer file
-        let expect_name = Some(filename.to_string());
-
-        let (db, collection_hash) =
-            provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
-        // hash of the whole collection
-        let addr = format!("127.0.0.1:{port}").parse().unwrap();
-        let mut provider = provider::Provider::builder().database(db).build()?;
-        let peer_id = provider.peer_id();
-        let token = provider.auth_token();
-
-        let provider_task = tokio::task::spawn(async move {
-            provider.run(provider::Options { addr }).await.unwrap();
-        });
-
-        let opts = get::Options {
-            addr,
-            peer_id: Some(peer_id),
-        };
-        let stream = get::run(collection_hash, token, opts);
-        tokio::pin!(stream);
-
-        tokio::pin!(stream);
-        while let Some(event) = stream.next().await {
-            let event = event?;
-            if let Event::Receiving {
-                hash: got_hash,
-                mut reader,
-                name: got_name,
-            } = event
-            {
-                assert_eq!(expect_hash, got_hash);
-                let expect = tokio::fs::read(&path).await?;
-                let mut got = Vec::new();
-                reader.read_to_end(&mut got).await?;
-                assert_eq!(expect, got);
-                assert_eq!(expect_name, got_name);
-            }
-        }
-
-        provider_task.abort();
-        let _ = provider_task.await;
-        Ok(())
+        transfer_data(
+            vec![("hello_world", "hello world!".as_bytes().to_vec())],
+            port,
+        )
+        .await
     }
 
     #[tokio::test]
     async fn multi_file() -> Result<()> {
-        let dir: PathBuf = testdir!();
         let file_opts = vec![
             ("1", 10),
             ("2", 1024),
@@ -93,75 +41,13 @@ mod tests {
             // overkill, but it works! Just annoying to wait for
             // ("4", 1024 * 1024 * 90),
         ];
-
-        // create and save files
-        let mut files = Vec::new();
-        let mut expects = Vec::new();
-        for opt in file_opts {
-            let (name, size) = opt;
-            let path = dir.join(name);
-            let mut content = vec![0u8; size];
-            rand::thread_rng().fill_bytes(&mut content);
-
-            // get expected hash of file
-            let (_, hash) = bao::encode::outboard(&content);
-
-            tokio::fs::write(&path, content).await?;
-            files.push(provider::DataSource::File(path.clone()));
-
-            // keep track of expected values
-            expects.push((Some(name.to_string()), path, hash));
-        }
-
-        let (db, collection_hash) = provider::create_db(files).await?;
-        // hash of the whole collection
-        let addr = "127.0.0.1:4446".parse().unwrap();
-        let mut provider = provider::Provider::builder().database(db).build()?;
-        let peer_id = provider.peer_id();
-        let token = provider.auth_token();
-
-        let provider_task = tokio::task::spawn(async move {
-            provider.run(provider::Options { addr }).await.unwrap();
-        });
-
-        let opts = get::Options {
-            addr,
-            peer_id: Some(peer_id),
-        };
-        let stream = get::run(collection_hash, token, opts);
-
-        tokio::pin!(stream);
-
-        // needs to iterate until `done`
-        tokio::pin!(stream);
-        let mut i = 0;
-        while let Some(event) = stream.next().await {
-            let event = event?;
-            if let Event::Receiving {
-                hash: got_hash,
-                mut reader,
-                name: got_name,
-            } = event
-            {
-                let (expect_name, path, expect_hash) = expects.get(i).unwrap();
-                assert_eq!(*expect_hash, got_hash);
-                let expect = tokio::fs::read(&path).await?;
-                let mut got = Vec::new();
-                reader.read_to_end(&mut got).await?;
-                assert_eq!(expect, got);
-                assert_eq!(*expect_name, got_name);
-                i += 1;
-            }
-        }
-
-        provider_task.abort();
-        let _ = provider_task.await;
-        Ok(())
+        transfer_random_data(file_opts, 4446).await
     }
 
     #[tokio::test]
     async fn sizes() -> Result<()> {
         let sizes = [
+            0,
             10,
             100,
             1024,
@@ -173,12 +59,22 @@ mod tests {
         let port: u16 = 4445;
 
         for size in sizes {
-            let mut content = vec![0u8; size];
-            rand::thread_rng().fill_bytes(&mut content);
-            single_file("hello_world", &content, port).await?;
+            transfer_random_data(vec![("hello_world", size)], port).await?;
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_files() -> Result<()> {
+        // try to transfer as many files as possible without hitting a limit
+        // booo 400 is too small :(
+        let num_files = 400;
+        let mut file_opts = Vec::new();
+        for i in 0..num_files {
+            file_opts.push((i.to_string(), 0));
+        }
+        transfer_random_data(file_opts, 4447).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -254,6 +150,94 @@ mod tests {
             task.await??;
         }
 
+        Ok(())
+    }
+
+    // Run the test creating random data for each blob, using the size specified by the file
+    // options
+    // TODO: use random ports
+    async fn transfer_random_data<S>(file_opts: Vec<(S, usize)>, port: u16) -> Result<()>
+    where
+        S: Into<String> + std::fmt::Debug + std::cmp::PartialEq,
+    {
+        let file_opts = file_opts
+            .into_iter()
+            .map(|(name, size)| {
+                let mut content = vec![0u8; size];
+                rand::thread_rng().fill_bytes(&mut content);
+                (name, content)
+            })
+            .collect();
+        transfer_data(file_opts, port).await
+    }
+
+    // Run the test for a vec of filenames and blob data
+    // TODO: use random ports
+    async fn transfer_data<S>(file_opts: Vec<(S, Vec<u8>)>, port: u16) -> Result<()>
+    where
+        S: Into<String> + std::fmt::Debug + std::cmp::PartialEq,
+    {
+        let dir: PathBuf = testdir!();
+
+        // create and save files
+        let mut files = Vec::new();
+        let mut expects = Vec::new();
+
+        for opt in file_opts.into_iter() {
+            let (name, data) = opt;
+
+            let name = name.into();
+            let path = dir.join(name.clone());
+            // get expected hash of file
+            let (_, hash) = bao::encode::outboard(&data);
+
+            tokio::fs::write(&path, data).await?;
+            files.push(provider::DataSource::File(path.clone()));
+
+            // keep track of expected values
+            expects.push((Some(name), path, hash));
+        }
+
+        let (db, collection_hash) = provider::create_db(files).await?;
+
+        let addr = format!("127.0.0.1:{port}").parse().unwrap();
+        let mut provider = provider::Provider::builder().database(db).build()?;
+        let peer_id = provider.peer_id();
+        let token = provider.auth_token();
+
+        let provider_task = tokio::task::spawn(async move {
+            provider.run(provider::Options { addr }).await.unwrap();
+        });
+
+        let opts = get::Options {
+            addr,
+            peer_id: Some(peer_id),
+        };
+        let stream = get::run(collection_hash, token, opts);
+        tokio::pin!(stream);
+
+        let mut i = 0;
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            if let Event::Receiving {
+                hash: got_hash,
+                mut reader,
+                name: got_name,
+            } = event
+            {
+                let (expect_name, path, expect_hash) = expects.get(i).unwrap();
+                assert_eq!(*expect_hash, got_hash);
+                let expect = tokio::fs::read(&path).await?;
+                let mut got = Vec::new();
+                reader.read_to_end(&mut got).await?;
+                assert_eq!(expect, got);
+                assert_eq!(*expect_name, got_name);
+                i += 1;
+            }
+        }
+
+        provider_task.abort();
+        let _ = provider_task.await;
         Ok(())
     }
 }
