@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{io::Read, net::SocketAddr, time::Instant};
 
-use anyhow::{anyhow, Result, Context};
+use anyhow::{anyhow, Result};
 use bytes::BytesMut;
 use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
@@ -99,12 +99,6 @@ impl Debug for Event {
     }
 }
 
-async fn read_n(mut reader: impl AsyncRead + Unpin, size: usize) -> tokio::io::Result<Vec<u8>> {
-    let mut buffer = vec![0u8; size];
-    reader.read_exact(buffer.as_mut_slice()).await.unwrap();
-    Ok(buffer)
-}
-
 pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item = Result<Event>> {
     async_stream::try_stream! {
         let now = Instant::now();
@@ -159,36 +153,26 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
 
-                            // let expected = u64::try_from(bao::encode::encoded_size(size as u64)).unwrap();
-                            let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
-
-                            // // TODO: avoid buffering
-
-                            // // remove response buffered data
-                            // println!("getting data of size {}", size);
-                            // let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
-                            // println!("expecting {}", expected);
-                            // let buffer = read_n(&mut reader, expected).await?;
-                            // println!("received data: {} bytes", buffer.len());
-
-                            // if expected != buffer.len() {
-                            //     Err(anyhow!("expected {} bytes, got {} bytes", expected, buffer.len()))?;
-                            // }
-                            // println!("got {}", buffer.len());
+                            let mut reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
                             let (a, b) = tokio::io::duplex(1024);
 
-                            // TODO: avoid copy
-                            let outboard = outboard.to_vec();
-                            println!("got outboard of size {}", outboard.len());
+                            let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
+                            let mut temp = vec![0; expected];
+                            // reading via tokio works 100% of the time
+                            // reader.read_exact(&mut temp).await?;
+                            let handle = tokio::runtime::Handle::current();
                             let t = tokio::task::spawn_blocking(move || {
-                                let reader = SyncIoBridge::new(reader);
+                                // reading via the sync bridge fails sometimes
+                                let mut reader = SyncIoBridge::new_with_handle(reader, handle);
+                                reader.read_exact(&mut temp)?;
+
                                 let mut decoder = bao::decode::Decoder::new(
-                                    reader,
+                                    std::io::Cursor::new(&temp),
                                     &hash,
                                 );
 
                                 let mut writer = SyncIoBridge::new(b);
-                                let n = std::io::copy(&mut decoder, &mut writer).context("copy failure")?;
+                                let n = std::io::copy(&mut decoder, &mut writer)?;
                                 let size = size as u64;
                                 if n < size {
                                     Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
