@@ -12,7 +12,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::SyncIoBridge;
 use tracing::debug;
 
-use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
+use crate::protocol::{
+    ensure_buffer_size, read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response,
+};
 use crate::tls::{self, Keypair, PeerId};
 
 const MAX_DATA_SIZE: usize = 1024 * 1024 * 1024;
@@ -145,7 +147,11 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                 Some(response_buffer) => {
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
-                        Res::Found { size } => {
+                        Res::Found => {
+                            // the bao slice encoding contains the overall data size as a le encoded u64
+                            // so we are guaranteed to have at least 8 bytes
+                            ensure_buffer_size(&mut reader, &mut in_buffer, 8).await?;
+                            let size = u64::from_le_bytes(in_buffer[..8].try_into().unwrap()) as usize;
                             yield Event::Requested { size };
 
                             // Need to read the message now
@@ -154,7 +160,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             }
 
                             let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
-                            let (a, b) = tokio::io::duplex(1024);
+                            let (recv, send) = tokio::io::duplex(1024);
 
                             let handle = tokio::runtime::Handle::current();
                             let t = tokio::task::spawn_blocking(move || {
@@ -165,7 +171,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                     &hash,
                                 );
 
-                                let mut writer = SyncIoBridge::new(b);
+                                let mut writer = SyncIoBridge::new(send);
                                 let n = std::io::copy(&mut decoder, &mut writer)?;
                                 let size = size as u64;
                                 if n < size {
@@ -174,7 +180,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 anyhow::Ok(())
                             });
 
-                            yield Event::Receiving { hash, reader: Box::new(a) };
+                            yield Event::Receiving { hash, reader: Box::new(recv) };
 
                             t.await??;
 

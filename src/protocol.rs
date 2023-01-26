@@ -45,19 +45,13 @@ pub struct Response {
 pub enum Res {
     NotFound,
     // If found, a stream of bao data is sent as next message.
-    Found {
-        /// The size of the coming data in bytes, raw content size.
-        size: usize,
-    },
+    Found,
 }
 
 impl Res {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
-        match self {
-            Self::Found { size: _ } => 0,
-            _ => 0,
-        }
+        0
     }
 }
 
@@ -130,6 +124,17 @@ async fn read_prefix<R: AsyncRead + futures::io::AsyncRead + Unpin>(
     };
 
     Ok(size)
+}
+
+pub async fn ensure_buffer_size<R: AsyncRead + futures::io::AsyncRead + Unpin>(
+    mut reader: R,
+    buffer: &mut BytesMut,
+    size: usize,
+) -> Result<()> {
+    while buffer.len() < size {
+        reader.read_buf(buffer).await?;
+    }
+    Ok(())
 }
 
 /// A token used to authenticate a handshake.
