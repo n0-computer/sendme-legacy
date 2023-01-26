@@ -1,3 +1,7 @@
+use std::io::Read;
+
+use anyhow::{Context, Result};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -10,39 +14,37 @@ pub(crate) struct Collection {
     pub(crate) total_blobs_size: u64,
 }
 
+impl Collection {
+    pub async fn decode_from(data: Bytes, outboard: &[u8], hash: bao::Hash) -> Result<Self> {
+        // TODO: avoid copy
+        let outboard = outboard.to_vec();
+        // verify that the content of data matches the expected hash
+        let mut decoder =
+            bao::decode::Decoder::new_outboard(std::io::Cursor::new(&data[..]), &*outboard, &hash);
+
+        let mut buf = [0u8; 1024];
+        loop {
+            // TODO: write & use an `async decoder`
+            let read = decoder
+                .read(&mut buf)
+                .context("hash of Collection data does not match")?;
+            if read == 0 {
+                break;
+            }
+        }
+        let c: Collection =
+            postcard::from_bytes(&data).context("failed to serialize Collection data")?;
+        Ok(c)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-// #[serde(from = "SerdeBlob")]
-// #[serde(into = "SerdeBlob")]
 pub(crate) struct Blob {
     /// The name of this blob of data
     pub(crate) name: String,
     /// The hash of the blob of data
     #[serde(with = "hash_serde")]
     pub(crate) hash: bao::Hash,
-}
-
-#[derive(Deserialize, Serialize, Clone)]
-struct SerdeBlob {
-    name: String,
-    hash: [u8; 32],
-}
-
-impl From<Blob> for SerdeBlob {
-    fn from(b: Blob) -> Self {
-        Self {
-            name: b.name,
-            hash: *b.hash.as_bytes(),
-        }
-    }
-}
-
-impl From<SerdeBlob> for Blob {
-    fn from(s: SerdeBlob) -> Self {
-        Self {
-            name: s.name,
-            hash: bao::Hash::from(s.hash),
-        }
-    }
 }
 
 mod hash_serde {
