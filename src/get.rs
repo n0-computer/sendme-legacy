@@ -87,16 +87,15 @@ impl Debug for Event {
         match self {
             Self::Connected => write!(f, "Event::Connected"),
             Self::ReceivedCollection(c) => {
-                write!(f, "Event::ReceivedCollection({:#?})", c)
+                write!(f, "Event::ReceivedCollection({c:#?})")
             }
             Self::Receiving { hash, name, .. } => {
                 write!(
                     f,
-                    "Event::Receiving {{ hash: {hash}, reader: Box<AsyncReader>, name: {:#?} }}",
-                    name
+                    "Event::Receiving {{ hash: {hash}, reader: Box<AsyncReader>, name: {name:#?} }}"
                 )
             }
-            Self::Done(s) => write!(f, "Event::Done({:#?})", s),
+            Self::Done(s) => write!(f, "Event::Done({s:#?})"),
         }
     }
 }

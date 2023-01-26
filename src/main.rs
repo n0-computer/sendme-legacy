@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
                         mut reader,
                         name,
                     } => {
-                        println!("  {}", style(format!("Receiving {}...", hash)).bold().dim());
+                        println!("  {}", style(format!("Receiving {hash}...")).bold().dim());
 
                         if let Some(ref outpath) = out {
                             let name = name.map_or_else(|| hash.to_string(), |n| n);
