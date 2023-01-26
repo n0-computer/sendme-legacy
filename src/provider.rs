@@ -238,8 +238,8 @@ async fn write_response<W: AsyncWrite + Unpin>(
 ) -> Result<()> {
     let response = Response { id, data: res };
 
-    if buffer.len() < 20 + response.data.len() {
-        buffer.resize(20 + response.data.len(), 0u8);
+    if buffer.len() < 20 {
+        buffer.resize(20, 0u8);
     }
     let used = postcard::to_slice(&response, buffer)?;
 

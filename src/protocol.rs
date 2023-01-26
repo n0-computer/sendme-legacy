@@ -48,13 +48,6 @@ pub enum Res {
     Found,
 }
 
-impl Res {
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        0
-    }
-}
-
 /// Write the given data to the provider sink, with a unsigned varint length prefix.
 pub async fn write_lp<W: AsyncWrite + Unpin>(writer: &mut W, data: &[u8]) -> Result<()> {
     ensure!(

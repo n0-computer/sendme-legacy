@@ -17,7 +17,7 @@ use crate::protocol::{
 };
 use crate::tls::{self, Keypair, PeerId};
 
-const MAX_DATA_SIZE: usize = 1024 * 1024 * 1024;
+const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -58,7 +58,7 @@ async fn setup(opts: Options) -> Result<(Client, Connection)> {
 /// Stats about the transfer.
 #[derive(Debug)]
 pub struct Stats {
-    pub data_len: usize,
+    pub data_len: u64,
     pub elapsed: Duration,
     pub mbits: f64,
 }
@@ -151,8 +151,8 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             // the bao slice encoding contains the overall data size as a le encoded u64
                             // so we are guaranteed to have at least 8 bytes
                             ensure_buffer_size(&mut reader, &mut in_buffer, 8).await?;
-                            let size = u64::from_le_bytes(in_buffer[..8].try_into().unwrap()) as usize;
-                            yield Event::Requested { size };
+                            let size = u64::from_le_bytes(in_buffer[..8].try_into().unwrap());
+                            yield Event::Requested { size: usize::try_from(size)? };
 
                             // Need to read the message now
                             if size > MAX_DATA_SIZE {
@@ -173,7 +173,6 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                                 let mut writer = SyncIoBridge::new(send);
                                 let n = std::io::copy(&mut decoder, &mut writer)?;
-                                let size = size as u64;
                                 if n < size {
                                     Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
                                 }
