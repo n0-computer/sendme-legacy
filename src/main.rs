@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
                                 .with_key("eta", |state: &ProgressState, w: &mut dyn std::fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
                                 .progress_chars("#>-")
                         );
-                        pb.set_length(size as u64);
+                        pb.set_length(size);
                         pb.set_draw_target(ProgressDrawTarget::stderr());
                     }
                     get::Event::Receiving {
