@@ -63,22 +63,22 @@ enum Commands {
 
 struct OutWriter {
     is_atty: bool,
-    stdout: std::io::Stdout,
+    stderr: std::io::Stderr,
 }
 
 impl OutWriter {
     pub fn new() -> Self {
-        let stdout = std::io::stdout();
-        let is_atty = stdout.is_terminal();
-        Self { is_atty, stdout }
+        let stderr = std::io::stderr();
+        let is_atty = stderr.is_terminal();
+        Self { is_atty, stderr }
     }
 }
 
 impl OutWriter {
     pub fn println(&mut self, content: impl AsRef<[u8]>) {
         if self.is_atty {
-            self.stdout.write_all(content.as_ref()).unwrap();
-            self.stdout.write_all(b"\n").unwrap();
+            self.stderr.write_all(content.as_ref()).unwrap();
+            self.stderr.write_all(b"\n").unwrap();
         }
     }
 }
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let mut stdout = OutWriter::new();
+    let mut out_writer = OutWriter::new();
 
     match cli.command {
         Commands::Get {
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             addr,
             out,
         } => {
-            stdout.println(format!("Fetching: {}", hash.to_hex()));
+            out_writer.println(format!("Fetching: {}", hash.to_hex()));
 
             let mut opts = get::Options {
                 peer_id: Some(peer_id),
@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
             let token =
                 AuthToken::from_str(&token).context("Wrong format for authentication token")?;
 
-            stdout.println(format!("{} Connecting ...", style("[1/3]").bold().dim()));
+            out_writer.println(format!("{} Connecting ...", style("[1/3]").bold().dim()));
 
             let pb = ProgressBar::hidden();
             let stream = get::run(hash, token, opts);
@@ -126,10 +126,12 @@ async fn main() -> Result<()> {
                 trace!("client event: {:?}", event);
                 match event? {
                     get::Event::Connected => {
-                        stdout.println(format!("{} Requesting ...", style("[2/3]").bold().dim()));
+                        out_writer
+                            .println(format!("{} Requesting ...", style("[2/3]").bold().dim()));
                     }
                     get::Event::Requested { size } => {
-                        stdout.println(format!("{} Downloading ...", style("[3/3]").bold().dim()));
+                        out_writer
+                            .println(format!("{} Downloading ...", style("[3/3]").bold().dim()));
                         pb.set_style(
                             ProgressStyle::with_template(PROGRESS_STYLE)
                                 .unwrap()
@@ -142,7 +144,7 @@ async fn main() -> Result<()> {
                                 .progress_chars("#>-"),
                         );
                         pb.set_length(size as u64);
-                        pb.set_draw_target(ProgressDrawTarget::stdout());
+                        pb.set_draw_target(ProgressDrawTarget::stderr());
                     }
                     get::Event::Receiving {
                         hash: new_hash,
@@ -173,14 +175,14 @@ async fn main() -> Result<()> {
                                 .await?
                                 .context("Failed to write output file")?;
                         } else {
-                            // Write to STDOUT
+                            // Write to OUT_WRITER
                             let mut stdout = tokio::io::stdout();
                             tokio::io::copy(&mut reader, &mut stdout).await?;
                         }
                     }
                     get::Event::Done(stats) => {
                         pb.finish_and_clear();
-                        stdout.println(format!("Done in {}", HumanDuration(stats.elapsed)));
+                        out_writer.println(format!("Done in {}", HumanDuration(stats.elapsed)));
                     }
                 }
             }
@@ -219,8 +221,8 @@ async fn main() -> Result<()> {
             }
             let mut provider = provider_builder.build()?;
 
-            stdout.println(format!("PeerID: {}", provider.peer_id()));
-            stdout.println(format!("Auth token: {}", provider.auth_token()));
+            out_writer.println(format!("PeerID: {}", provider.peer_id()));
+            out_writer.println(format!("Auth token: {}", provider.auth_token()));
             provider.run(opts).await?;
 
             // Drop tempath to signal it can be destroyed
