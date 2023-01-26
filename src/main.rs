@@ -58,8 +58,8 @@ enum Commands {
 
 // Note about writing to STDOUT vs STDERR
 // Looking at https://unix.stackexchange.com/questions/331611/do-progress-reports-logging-information-belong-on-stderr-or-stdout
-// it is a little complicated, so we go with the safe option and write everything to STDOUT,
-// but only IF we are writing to a TTY.
+// it is a little complicated.
+// The current setup is to write all progress information to STDERR and all data to STDOUT.
 
 struct OutWriter {
     is_atty: bool,
