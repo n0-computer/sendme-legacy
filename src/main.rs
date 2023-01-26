@@ -1,10 +1,11 @@
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{io::Write, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use anyhow::{anyhow, ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use console::style;
 use futures::StreamExt;
 use indicatif::{HumanDuration, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
+use is_terminal::IsTerminal;
 use sendme::protocol::AuthToken;
 use tracing::trace;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -40,10 +41,11 @@ enum Commands {
     #[clap(about = "Fetch the data from the hash")]
     Get {
         /// The authentication token to present to the server.
+        #[clap(long, short)]
         token: String,
         /// The root hash to retrieve.
         hash: bao::Hash,
-        #[clap(long)]
+        #[clap(long, short)]
         /// PeerId of the provider.
         peer_id: PeerId,
         #[clap(long, short)]
@@ -54,6 +56,36 @@ enum Commands {
     },
 }
 
+// Note about writing to STDOUT vs STDERR
+// Looking at https://unix.stackexchange.com/questions/331611/do-progress-reports-logging-information-belong-on-stderr-or-stdout
+// it is a little complicated, so we go with the safe option and write everything to STDOUT,
+// but only IF we are writing to a TTY.
+
+struct OutWriter {
+    is_atty: bool,
+    stdout: std::io::Stdout,
+}
+
+impl OutWriter {
+    pub fn new() -> Self {
+        let stdout = std::io::stdout();
+        let is_atty = stdout.is_terminal();
+        Self { is_atty, stdout }
+    }
+}
+
+impl OutWriter {
+    pub fn println(&mut self, content: impl AsRef<[u8]>) {
+        if self.is_atty {
+            self.stdout.write_all(content.as_ref()).unwrap();
+            self.stdout.write_all(b"\n").unwrap();
+        }
+    }
+}
+
+const PROGRESS_STYLE: &str =
+    "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})";
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -63,6 +95,8 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    let mut stdout = OutWriter::new();
+
     match cli.command {
         Commands::Get {
             hash,
@@ -71,7 +105,8 @@ async fn main() -> Result<()> {
             addr,
             out,
         } => {
-            println!("Fetching: {}", hash.to_hex());
+            stdout.println(format!("Fetching: {}", hash.to_hex()));
+
             let mut opts = get::Options {
                 peer_id: Some(peer_id),
                 ..Default::default()
@@ -82,7 +117,8 @@ async fn main() -> Result<()> {
             let token =
                 AuthToken::from_str(&token).context("Wrong format for authentication token")?;
 
-            println!("{} Connecting ...", style("[1/3]").bold().dim());
+            stdout.println(format!("{} Connecting ...", style("[1/3]").bold().dim()));
+
             let pb = ProgressBar::hidden();
             let stream = get::run(hash, token, opts);
             tokio::pin!(stream);
@@ -90,18 +126,23 @@ async fn main() -> Result<()> {
                 trace!("client event: {:?}", event);
                 match event? {
                     get::Event::Connected => {
-                        println!("{} Requesting ...", style("[2/3]").bold().dim());
+                        stdout.println(format!("{} Requesting ...", style("[2/3]").bold().dim()));
                     }
                     get::Event::Requested { size } => {
-                        println!("{} Downloading ...", style("[3/3]").bold().dim());
+                        stdout.println(format!("{} Downloading ...", style("[3/3]").bold().dim()));
                         pb.set_style(
-                            ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                            ProgressStyle::with_template(PROGRESS_STYLE)
                                 .unwrap()
-                                .with_key("eta", |state: &ProgressState, w: &mut dyn std::fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-                                .progress_chars("#>-")
+                                .with_key(
+                                    "eta",
+                                    |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                                        write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                                    },
+                                )
+                                .progress_chars("#>-"),
                         );
                         pb.set_length(size as u64);
-                        pb.set_draw_target(ProgressDrawTarget::stderr());
+                        pb.set_draw_target(ProgressDrawTarget::stdout());
                     }
                     get::Event::Receiving {
                         hash: new_hash,
@@ -139,8 +180,7 @@ async fn main() -> Result<()> {
                     }
                     get::Event::Done(stats) => {
                         pb.finish_and_clear();
-
-                        println!("Done in {}", HumanDuration(stats.elapsed));
+                        stdout.println(format!("Done in {}", HumanDuration(stats.elapsed)));
                     }
                 }
             }
@@ -179,8 +219,8 @@ async fn main() -> Result<()> {
             }
             let mut provider = provider_builder.build()?;
 
-            println!("PeerID: {}", provider.peer_id());
-            println!("Auth token: {}", provider.auth_token());
+            stdout.println(format!("PeerID: {}", provider.peer_id()));
+            stdout.println(format!("Auth token: {}", provider.auth_token()));
             provider.run(opts).await?;
 
             // Drop tempath to signal it can be destroyed
