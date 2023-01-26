@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::time::Duration;
-use std::{io::Read, net::SocketAddr, time::Instant};
+use std::{net::SocketAddr, time::Instant};
 
 use anyhow::{anyhow, Result};
 use bytes::BytesMut;
@@ -8,7 +8,7 @@ use futures::Stream;
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::SyncIoBridge;
 use tracing::debug;
 
@@ -145,7 +145,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                 Some(response_buffer) => {
                     let response: Response = postcard::from_bytes(&response_buffer)?;
                     match response.data {
-                        Res::Found { size, outboard } => {
+                        Res::Found { size } => {
                             yield Event::Requested { size };
 
                             // Need to read the message now
@@ -153,21 +153,15 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
                             }
 
-                            let mut reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
+                            let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
                             let (a, b) = tokio::io::duplex(1024);
 
-                            let expected = usize::try_from(bao::encode::encoded_size(size as u64)).unwrap();
-                            let mut temp = vec![0; expected];
-                            // reading via tokio works 100% of the time
-                            // reader.read_exact(&mut temp).await?;
                             let handle = tokio::runtime::Handle::current();
                             let t = tokio::task::spawn_blocking(move || {
-                                // reading via the sync bridge fails sometimes
-                                let mut reader = SyncIoBridge::new_with_handle(reader, handle);
-                                reader.read_exact(&mut temp)?;
+                                let reader = SyncIoBridge::new_with_handle(reader, handle);
 
                                 let mut decoder = bao::decode::Decoder::new(
-                                    std::io::Cursor::new(&temp),
+                                    reader,
                                     &hash,
                                 );
 

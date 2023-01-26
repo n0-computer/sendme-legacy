@@ -143,16 +143,11 @@ async fn handle_stream(
                             &mut writer,
                             &mut out_buffer,
                             request.id,
-                            Res::Found {
-                                size: *size,
-                                outboard: &[],
-                            },
+                            Res::Found { size: *size },
                         )
                         .await?;
 
                         debug!("writing data");
-                        let file = tokio::fs::File::open(&path).await?;
-                        let mut reader = tokio::io::BufReader::new(file);
                         let path = path.clone();
                         let outboard = outboard.clone();
                         let size = *size;
@@ -174,7 +169,6 @@ async fn handle_stream(
                         })
                         .await
                         .unwrap()?;
-                        tokio::io::copy(&mut reader, &mut writer).await?;
                     }
                     None => {
                         debug!("not found {}", name.to_hex());
@@ -245,7 +239,7 @@ async fn write_response<W: AsyncWrite + Unpin>(
     mut writer: W,
     buffer: &mut BytesMut,
     id: u64,
-    res: Res<'_>,
+    res: Res,
 ) -> Result<()> {
     let response = Response { id, data: res };
 

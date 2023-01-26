@@ -36,28 +36,26 @@ pub struct Request {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
-pub struct Response<'a> {
+pub struct Response {
     pub id: u64,
-    #[serde(borrow)]
-    pub data: Res<'a>,
+    pub data: Res,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
-pub enum Res<'a> {
+pub enum Res {
     NotFound,
     // If found, a stream of bao data is sent as next message.
     Found {
         /// The size of the coming data in bytes, raw content size.
         size: usize,
-        outboard: &'a [u8],
     },
 }
 
-impl Res<'_> {
+impl Res {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match self {
-            Self::Found { outboard, .. } => outboard.len(),
+            Self::Found { size: _ } => 0,
             _ => 0,
         }
     }
