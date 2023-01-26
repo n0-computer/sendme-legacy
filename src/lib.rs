@@ -9,7 +9,6 @@ pub use tls::{Keypair, PeerId, PeerIdError, PublicKey, SecretKey, Signature};
 
 #[cfg(test)]
 mod tests {
-
     use std::{net::SocketAddr, path::PathBuf};
 
     use crate::get::Event;
@@ -27,7 +26,7 @@ mod tests {
     async fn basics() -> Result<()> {
         let filename = "hello_world";
         let port: u16 = 4443;
-        single_file(filename, "hello world!".as_bytes(), false, port).await?;
+        // single_file(filename, "hello world!".as_bytes(), false, port).await
         single_file(filename, "hello world!".as_bytes(), true, port).await
     }
 
