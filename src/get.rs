@@ -168,7 +168,7 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                         match response.data {
                                             // unexpected message
                                             Res::FoundCollection { .. } => {
-                                                Err(anyhow!("unexpected message from server. ending transfer early"))?;
+                                                Err(anyhow!("Unexpected message from provider. Ending transfer early."))?;
                                             },
                                             // blob data not found
                                             Res::NotFound => {
@@ -191,16 +191,10 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             }
                         }
                         // server is sending over a single blob
-                        Res::Found { size, outboard } => {
-                            yield Event::Requested { size };
-
-                            // Need to read the message now
-                            if size > MAX_DATA_SIZE {
-                                Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
-                            }
-                            let (event, task) = read_and_decode_blob_data(size, outboard, hash, None, &mut reader, &mut in_buffer).await?;
-                            yield event;
-                            task.await??;
+                        Res::Found { .. } => {
+                            // we should only receive `Res::FoundCollection` or `Res::NotFound` from the
+                            // provider at this point in the exchange
+                            Err(anyhow!("Unexpected message from provider. Ending transfer early."))?;
                         }
                         // data associated with the hash is not found
                         Res::NotFound => {

@@ -26,27 +26,20 @@ mod tests {
     async fn basics() -> Result<()> {
         let filename = "hello_world";
         let port: u16 = 4443;
-        // single_file(filename, "hello world!".as_bytes(), false, port).await
-        single_file(filename, "hello world!".as_bytes(), true, port).await
+        single_file(filename, "hello world!".as_bytes(), port).await
     }
 
     // Run the test for a single file, with the option to transfer it as part of a collection or on
     // its own
-    // TODO: random ports? rather than assigning?
-    async fn single_file(filename: &str, data: &[u8], wrapped: bool, port: u16) -> Result<()> {
+    // TODO: use random ports
+    async fn single_file(filename: &str, data: &[u8], port: u16) -> Result<()> {
         let dir: PathBuf = testdir!();
         let path = dir.join(filename);
         let (_, expect_hash) = bao::encode::outboard(data);
         tokio::fs::write(&path, data).await?;
 
         // hash of the transfer file
-        let expect_name = {
-            if wrapped {
-                Some(filename.to_string())
-            } else {
-                None
-            }
-        };
+        let expect_name = Some(filename.to_string());
 
         let (db, collection_hash) =
             provider::create_db(vec![provider::DataSource::File(path.clone())]).await?;
@@ -64,19 +57,9 @@ mod tests {
             addr,
             peer_id: Some(peer_id),
         };
-        // let stream = client::run(collection_hash, opts);
-        let stream = {
-            if wrapped {
-                println!("fetching collection hash {}", collection_hash);
-                get::run(collection_hash, token, opts)
-            } else {
-                println!("fetching file hash {}", expect_hash);
-                get::run(expect_hash, token, opts)
-            }
-        };
+        let stream = get::run(collection_hash, token, opts);
         tokio::pin!(stream);
 
-        // needs to iterate until `done`
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             let event = event?;
@@ -192,8 +175,7 @@ mod tests {
         for size in sizes {
             let mut content = vec![0u8; size];
             rand::thread_rng().fill_bytes(&mut content);
-            single_file("hello_world", &content, false, port).await?;
-            single_file("hello_world", &content, true, port).await?;
+            single_file("hello_world", &content, port).await?;
         }
 
         Ok(())

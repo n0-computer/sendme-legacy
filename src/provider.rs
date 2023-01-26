@@ -166,28 +166,7 @@ async fn handle_stream(db: Database, token: AuthToken, stream: BidirectionalStre
                 debug!("got request({}): {}", request.id, name.to_hex());
 
                 match db.get(&name) {
-                    Some(BlobOrCollection::Blob(Data {
-                        outboard,
-                        path,
-                        size,
-                    })) => {
-                        debug!("found {}", name.to_hex());
-                        write_response(
-                            &mut writer,
-                            &mut out_buffer,
-                            request.id,
-                            Res::Found {
-                                size: *size,
-                                outboard,
-                            },
-                        )
-                        .await?;
-
-                        debug!("writing data");
-                        let file = tokio::fs::File::open(&path).await?;
-                        let mut reader = tokio::io::BufReader::new(file);
-                        tokio::io::copy(&mut reader, &mut writer).await?;
-                    }
+                    // We only respond to requests for collections, not individual blobs
                     Some(BlobOrCollection::Collection((outboard, data))) => {
                         debug!("found collection {}", name.to_hex());
 
@@ -222,7 +201,7 @@ async fn handle_stream(db: Database, token: AuthToken, stream: BidirectionalStre
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         debug!("not found {}", name.to_hex());
                         write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound)
                             .await?;
