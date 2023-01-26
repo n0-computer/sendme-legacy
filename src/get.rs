@@ -160,28 +160,34 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             }
 
                             let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
-                            let (recv, send) = tokio::io::duplex(1024);
+                            let (recv, mut send) = tokio::io::duplex(1024);
 
                             let handle = tokio::runtime::Handle::current();
-                            let t = tokio::task::spawn_blocking(move || {
-                                let reader = SyncIoBridge::new_with_handle(reader, handle);
+                            let synchronous = false;
+                            if synchronous {
+                                let t = tokio::task::spawn_blocking(move || {
+                                    let reader = SyncIoBridge::new_with_handle(reader, handle);
 
-                                let mut decoder = bao::decode::Decoder::new(
-                                    reader,
-                                    &hash,
-                                );
+                                    let mut decoder = bao::decode::Decoder::new(
+                                        reader,
+                                        &hash,
+                                    );
 
-                                let mut writer = SyncIoBridge::new(send);
-                                let n = std::io::copy(&mut decoder, &mut writer)?;
-                                if n < size {
-                                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
-                                }
-                                anyhow::Ok(())
-                            });
+                                    let mut writer = SyncIoBridge::new(send);
+                                    let n = std::io::copy(&mut decoder, &mut writer)?;
+                                    if n < size {
+                                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
+                                    }
+                                    anyhow::Ok(())
+                                });
 
-                            yield Event::Receiving { hash, reader: Box::new(recv) };
+                                yield Event::Receiving { hash, reader: Box::new(recv) };
 
-                            t.await??;
+                                t.await??;
+                            } else {
+                                let mut decoder = crate::bao_slice_decoder::AsyncSliceDecoder::new(reader, hash, 0, size);
+                                tokio::io::copy(&mut decoder, &mut send).await?;
+                            }
 
                             // Shut down the stream
                             debug!("shutting down stream");
