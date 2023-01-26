@@ -160,11 +160,11 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                             }
 
                             let reader = AsyncReadExt::chain(std::io::Cursor::new(in_buffer), reader);
-                            let (recv, mut send) = tokio::io::duplex(1024);
 
                             let handle = tokio::runtime::Handle::current();
                             let synchronous = false;
                             if synchronous {
+                                let (recv, send) = tokio::io::duplex(1024);
                                 let t = tokio::task::spawn_blocking(move || {
                                     let reader = SyncIoBridge::new_with_handle(reader, handle);
 
@@ -194,17 +194,9 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                                 t.await??;
                             } else {
-                                let t = tokio::task::spawn(async move {
-                                    let mut decoder = crate::bao_slice_decoder::AsyncSliceDecoder::new(reader, hash, 0, size);
-                                    let n = tokio::io::copy(&mut decoder, &mut send).await?;
-                                    if n < size {
-                                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
-                                    }
-                                    anyhow::Ok(())
-                                });
-
-                                yield Event::Receiving { hash, reader: Box::new(recv) };
-                                t.await??;
+                                // todo: this means that the stats below are not correct
+                                let decoder = crate::bao_slice_decoder::AsyncSliceDecoder::new(reader, hash, 0, size);
+                                yield Event::Receiving { hash, reader: Box::new(decoder) };
                             }
 
                             // Shut down the stream

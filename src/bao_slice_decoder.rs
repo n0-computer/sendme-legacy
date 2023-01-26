@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! An implementation of the bao SliceDecoder allowing both sync and async usage
 //!
 //! this is a stripped down version of a crate that does the blake3 outboard in
