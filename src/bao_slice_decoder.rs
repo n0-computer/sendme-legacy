@@ -423,7 +423,6 @@ impl<R: tokio::io::AsyncRead + Unpin> SliceValidator<R> {
         let item = self
             .next_with_full_buffer(current)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
-
         Poll::Ready(item.transpose())
     }
 }
@@ -445,9 +444,9 @@ pub struct SliceDecoder<R> {
 }
 
 impl<R: Read> SliceDecoder<R> {
-    pub fn new(inner: R, hash: blake3::Hash, start: u64, len: u64) -> Self {
+    pub fn new(inner: R, hash: &blake3::Hash, start: u64, len: u64) -> Self {
         Self {
-            inner: SliceValidator::new(inner, hash, start, len),
+            inner: SliceValidator::new(inner, *hash, start, len),
             current_item: None,
         }
     }
@@ -517,7 +516,7 @@ impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for AsyncSliceDecoder
         cx: &mut Context<'_>,
         tgt: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Poll::Ready(loop {
+        let res = Poll::Ready(loop {
             // if we have no current item, get the next one
             if self.current_item.is_none() {
                 self.current_item = match ready!(self.inner.poll_next_impl(cx)).transpose()? {
@@ -548,7 +547,8 @@ impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for AsyncSliceDecoder
             }
             debug_assert!(n > 0, "we should have read something");
             break Ok(());
-        })
+        });
+        res
     }
 }
 
@@ -591,7 +591,7 @@ mod tests {
 
         // test validation and reading
         let mut cursor = std::io::Cursor::new(&slice);
-        let mut reader = SliceDecoder::new(&mut cursor, hash, 0, len);
+        let mut reader = SliceDecoder::new(&mut cursor, &hash, 0, len);
         let mut data = vec![];
         reader.read_to_end(&mut data).unwrap();
         assert_eq!(data, test_data);
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(cursor.position(), slice.len() as u64);
 
         let mut cursor = Cursor::new(&slice);
-        let mut reader = SliceDecoder::new(&mut cursor, hash, slice_start, slice_len);
+        let mut reader = SliceDecoder::new(&mut cursor, &hash, slice_start, slice_len);
         let mut data = vec![];
         reader.read_to_end(&mut data).unwrap();
         // check that we have read the entire slice

@@ -168,9 +168,18 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
                                 let t = tokio::task::spawn_blocking(move || {
                                     let reader = SyncIoBridge::new_with_handle(reader, handle);
 
-                                    let mut decoder = bao::decode::Decoder::new(
+                                    // let mut decoder = bao::decode::SliceDecoder::new(
+                                    //     reader,
+                                    //     &hash,
+                                    //     0,
+                                    //     size,
+                                    // );
+
+                                    let mut decoder = crate::bao_slice_decoder::SliceDecoder::new(
                                         reader,
                                         &hash,
+                                        0,
+                                        size,
                                     );
 
                                     let mut writer = SyncIoBridge::new(send);
@@ -185,8 +194,17 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
 
                                 t.await??;
                             } else {
-                                let mut decoder = crate::bao_slice_decoder::AsyncSliceDecoder::new(reader, hash, 0, size);
-                                tokio::io::copy(&mut decoder, &mut send).await?;
+                                let t = tokio::task::spawn(async move {
+                                    let mut decoder = crate::bao_slice_decoder::AsyncSliceDecoder::new(reader, hash, 0, size);
+                                    let n = tokio::io::copy(&mut decoder, &mut send).await?;
+                                    if n < size {
+                                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "expected more data"))?;
+                                    }
+                                    anyhow::Ok(())
+                                });
+
+                                yield Event::Receiving { hash, reader: Box::new(recv) };
+                                t.await??;
                             }
 
                             // Shut down the stream
