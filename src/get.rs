@@ -2,9 +2,10 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{io::Read, net::SocketAddr, time::Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use bytes::BytesMut;
 use futures::Stream;
+use genawaiter::sync::{Co, Gen};
 use postcard::experimental::max_size::MaxSize;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
@@ -99,127 +100,154 @@ impl Debug for Event {
 }
 
 pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item = Result<Event>> {
-    async_stream::try_stream! {
-        let now = Instant::now();
-        let (_client, mut connection) = setup(opts).await?;
+    Gen::new(|co| producer(hash, token, opts, co))
+}
 
-        let stream = connection.open_bidirectional_stream().await?;
-        let (mut reader, mut writer) = stream.split();
-
-        yield Event::Connected;
-
-
-        let mut out_buffer = BytesMut::zeroed(std::cmp::max(
-            Request::POSTCARD_MAX_SIZE,
-            Handshake::POSTCARD_MAX_SIZE,
-        ));
-
-        // 1. Send Handshake
-        {
-            debug!("sending handshake");
-            let handshake = Handshake::new(token);
-            let used = postcard::to_slice(&handshake, &mut out_buffer)?;
-            write_lp(&mut writer, used).await?;
+async fn producer(hash: bao::Hash, token: AuthToken, opts: Options, mut co: Co<Result<Event>>) {
+    match inner_producer(hash, token, opts, &mut co).await {
+        Ok(()) => {}
+        Err(err) => {
+            co.yield_(Err(err)).await;
         }
+    }
+}
 
-        // 2. Send Request
-        {
-            debug!("sending request");
-            let req = Request {
-                id: 1,
-                name: hash.into(),
-            };
+async fn inner_producer(
+    hash: bao::Hash,
+    token: AuthToken,
+    opts: Options,
+    co: &mut Co<Result<Event>>,
+) -> Result<()> {
+    let now = Instant::now();
+    let (_client, mut connection) = setup(opts).await?;
 
-            let used = postcard::to_slice(&req, &mut out_buffer)?;
-            write_lp(&mut writer, used).await?;
-        }
+    let stream = connection.open_bidirectional_stream().await?;
+    let (mut reader, mut writer) = stream.split();
 
-        // 3. Read response
-        {
-            debug!("reading response");
-            let mut in_buffer = BytesMut::with_capacity(1024);
+    co.yield_(Ok(Event::Connected)).await;
 
-            // read next message
-            match read_lp_data(&mut reader, &mut in_buffer).await? {
-                Some(response_buffer) => {
-                    let response: Response = postcard::from_bytes(&response_buffer)?;
-                    match response.data {
-                        Res::Found { size, outboard } => {
-                            yield Event::Requested { size };
+    let mut out_buffer = BytesMut::zeroed(std::cmp::max(
+        Request::POSTCARD_MAX_SIZE,
+        Handshake::POSTCARD_MAX_SIZE,
+    ));
 
-                            // Need to read the message now
-                            if size > MAX_DATA_SIZE {
-                                Err(anyhow!("size too large: {} > {}", size, MAX_DATA_SIZE))?;
-                            }
+    // 1. Send Handshake
+    {
+        debug!("sending handshake");
+        let handshake = Handshake::new(token);
+        let used = postcard::to_slice(&handshake, &mut out_buffer)?;
+        write_lp(&mut writer, used).await?;
+    }
 
-                            // TODO: avoid buffering
+    // 2. Send Request
+    {
+        debug!("sending request");
+        let req = Request {
+            id: 1,
+            name: hash.into(),
+        };
 
-                            // remove response buffered data
-                            while in_buffer.len() < size {
-                                reader.read_buf(&mut in_buffer).await?;
-                            }
+        let used = postcard::to_slice(&req, &mut out_buffer)?;
+        write_lp(&mut writer, used).await?;
+    }
 
-                            debug!("received data: {}bytes", in_buffer.len());
-                            if size != in_buffer.len() {
-                                Err(anyhow!("expected {} bytes, got {} bytes", size, in_buffer.len()))?;
-                            }
-                            let (a, mut b) = tokio::io::duplex(1024);
+    // 3. Read response
+    {
+        debug!("reading response");
+        let mut in_buffer = BytesMut::with_capacity(1024);
 
-                            // TODO: avoid copy
-                            let outboard = outboard.to_vec();
-                            let t = tokio::task::spawn(async move {
-                                let mut decoder = bao::decode::Decoder::new_outboard(
-                                    std::io::Cursor::new(&in_buffer[..]),
-                                    &*outboard,
-                                    &hash,
-                                );
+        // read next message
+        match read_lp_data(&mut reader, &mut in_buffer).await? {
+            Some(response_buffer) => {
+                let response: Response = postcard::from_bytes(&response_buffer)?;
+                match response.data {
+                    Res::Found { size, outboard } => {
+                        co.yield_(Ok(Event::Requested { size })).await;
 
+                        // Need to read the message now
+                        ensure!(
+                            size <= MAX_DATA_SIZE,
+                            "size too large: {} > {}",
+                            size,
+                            MAX_DATA_SIZE
+                        );
 
-                                let mut buf = [0u8; 1024];
-                                loop {
-                                    // TODO: avoid blocking
-                                    let read = decoder.read(&mut buf)?;
-                                    if read == 0 {
-                                        break;
-                                    }
-                                    b.write_all(&buf[..read]).await?;
+                        // TODO: avoid buffering
+
+                        // remove response buffered data
+                        while in_buffer.len() < size {
+                            reader.read_buf(&mut in_buffer).await?;
+                        }
+
+                        debug!("received data: {}bytes", in_buffer.len());
+                        ensure!(
+                            size == in_buffer.len(),
+                            "expected {} bytes, got {} bytes",
+                            size,
+                            in_buffer.len()
+                        );
+
+                        let (a, mut b) = tokio::io::duplex(1024);
+
+                        // TODO: avoid copy
+                        let outboard = outboard.to_vec();
+                        let t = tokio::task::spawn(async move {
+                            let mut decoder = bao::decode::Decoder::new_outboard(
+                                std::io::Cursor::new(&in_buffer[..]),
+                                &*outboard,
+                                &hash,
+                            );
+
+                            let mut buf = [0u8; 1024];
+                            loop {
+                                // TODO: avoid blocking
+                                let read = decoder.read(&mut buf)?;
+                                if read == 0 {
+                                    break;
                                 }
-                                b.flush().await?;
-                                debug!("finished writing");
-                                Ok::<(), anyhow::Error>(())
-                            });
+                                b.write_all(&buf[..read]).await?;
+                            }
+                            b.flush().await?;
+                            debug!("finished writing");
+                            Ok::<(), anyhow::Error>(())
+                        });
 
-                            yield Event::Receiving { hash, reader: Box::new(a) };
+                        co.yield_(Ok(Event::Receiving {
+                            hash,
+                            reader: Box::new(a),
+                        }))
+                        .await;
 
-                            t.await??;
+                        t.await??;
 
-                            // Shut down the stream
-                            debug!("shutting down stream");
-                            writer.close().await?;
+                        // Shut down the stream
+                        debug!("shutting down stream");
+                        writer.close().await?;
 
-                            let data_len = size;
-                            let elapsed = now.elapsed();
-                            let elapsed_s = elapsed.as_secs_f64();
-                            let data_len_bit = data_len * 8;
-                            let mbits = data_len_bit as f64 / (1000. * 1000.) / elapsed_s;
+                        let data_len = size;
+                        let elapsed = now.elapsed();
+                        let elapsed_s = elapsed.as_secs_f64();
+                        let data_len_bit = data_len * 8;
+                        let mbits = data_len_bit as f64 / (1000. * 1000.) / elapsed_s;
 
-                            let stats = Stats {
-                                data_len,
-                                elapsed,
-                                mbits,
-                            };
+                        let stats = Stats {
+                            data_len,
+                            elapsed,
+                            mbits,
+                        };
 
-                            yield Event::Done(stats);
-                        }
-                        Res::NotFound => {
-                            Err(anyhow!("data not found"))?;
-                        }
+                        co.yield_(Ok(Event::Done(stats))).await;
+                    }
+                    Res::NotFound => {
+                        bail!("data not found");
                     }
                 }
-                None => {
-                    Err(anyhow!("provider disconnected"))?;
-                }
+            }
+            None => {
+                bail!("provider disconnected");
             }
         }
     }
+
+    Ok(())
 }
