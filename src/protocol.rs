@@ -62,7 +62,7 @@ pub async fn write_lp<W: AsyncWrite + Unpin>(writer: &mut W, data: &[u8]) -> Res
 }
 
 /// Read and deserialize into the given type from the provided source, based on the length prefix.
-pub async fn read_lp<'a, R: AsyncRead + futures::io::AsyncRead + Unpin, T: Deserialize<'a>>(
+pub async fn read_lp<'a, R: AsyncRead + Unpin, T: Deserialize<'a>>(
     mut reader: R,
     buffer: &'a mut BytesMut,
 ) -> Result<Option<(T, usize)>> {
@@ -81,7 +81,7 @@ pub async fn read_lp<'a, R: AsyncRead + futures::io::AsyncRead + Unpin, T: Deser
     Ok(Some((response, size.try_into()?)))
 }
 
-async fn read_prefix<R: AsyncRead + futures::io::AsyncRead + Unpin>(mut reader: R) -> Result<u64> {
+async fn read_prefix<R: AsyncRead + Unpin>(mut reader: R) -> Result<u64> {
     // read length prefix
     let size = reader.read_u64_le().await?;
     ensure!(size < MAX_MESSAGE_SIZE, "received message is too large");

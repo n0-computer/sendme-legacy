@@ -76,7 +76,7 @@ pub enum Event {
         /// The hash of the content we received.
         hash: bao::Hash,
         /// The actual data we are receiving.
-        reader: AsyncSliceDecoder<ReceiveStream>,
+        reader: AsyncSliceDecoder<tokio::io::BufReader<ReceiveStream>>,
     },
     /// The transfer is done.
     Done(Stats),
@@ -106,7 +106,8 @@ pub fn run(hash: bao::Hash, token: AuthToken, opts: Options) -> impl Stream<Item
         let (_client, mut connection) = setup(opts).await?;
 
         let stream = connection.open_bidirectional_stream().await?;
-        let (mut reader, mut writer) = stream.split();
+        let (reader, mut writer) = stream.split();
+        let mut reader = tokio::io::BufReader::new(reader);
 
         yield Event::Connected;
 
