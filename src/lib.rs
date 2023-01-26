@@ -2,6 +2,7 @@ pub mod get;
 pub mod protocol;
 pub mod provider;
 
+mod bao_slice_decoder;
 mod tls;
 
 pub use tls::{PeerId, PeerIdError};
