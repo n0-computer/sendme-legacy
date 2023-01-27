@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::{collections::HashMap, sync::Arc};
@@ -292,7 +293,7 @@ pub enum DataSource {
 /// If the size of the file is changed while this is running, an error will be
 /// returned.
 fn compute_outboard(path: PathBuf) -> anyhow::Result<(blake3::Hash, Vec<u8>)> {
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let len = file.metadata()?.len();
     // compute outboard size so we can pre-allocate the buffer.
     //
@@ -309,10 +310,11 @@ fn compute_outboard(path: PathBuf) -> anyhow::Result<(blake3::Hash, Vec<u8>)> {
     let outboard_cursor = std::io::Cursor::new(&mut outboard);
     let mut encoder = bao::encode::Encoder::new_outboard(outboard_cursor);
 
+    let mut reader = BufReader::new(file);
     // the length we have actually written, should be the same as the length of the file.
-    let len2 = std::io::copy(&mut file, &mut encoder)?;
+    let len2 = std::io::copy(&mut reader, &mut encoder)?;
     // this can fail if the file was appended to during encoding.
-    anyhow::ensure!(len == len2, "file changed during encoding");
+    ensure!(len == len2, "file changed during encoding");
     // this flips the outboard encoding from post-order to pre-order
     let hash = encoder.finalize()?;
     anyhow::Ok((hash, outboard))
@@ -343,7 +345,7 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
                 let (hash, outboard) =
                     tokio::task::spawn_blocking(move || compute_outboard(path2)).await??;
 
-                anyhow::ensure!(outboard.len() >= 8);
+                debug_assert!(outboard.len() >= 8, "outboard must at least contain size");
                 let size = u64::from_le_bytes(outboard[..8].try_into().unwrap());
                 println!("- {}: {} bytes", hash.to_hex(), size);
                 db.insert(
