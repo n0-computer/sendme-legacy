@@ -96,7 +96,7 @@ mod tests {
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 
-        tokio::task::spawn(async move {
+        let provider_task = tokio::task::spawn(async move {
             provider.run(provider::Options { addr }).await.unwrap();
         });
 
@@ -149,6 +149,9 @@ mod tests {
         for task in tasks {
             task.await??;
         }
+
+        provider_task.abort();
+        let _ = provider_task.await;
 
         Ok(())
     }
