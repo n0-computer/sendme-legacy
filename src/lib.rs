@@ -83,7 +83,7 @@ mod tests {
         let filename = "hello_world";
         let path = dir.join(filename);
         let content = b"hello world!";
-        let addr = "0.0.0.0:4444".parse().unwrap();
+        let addr = "127.0.0.1:4444".parse().unwrap();
 
         tokio::fs::write(&path, content).await?;
         // hash of the transfer file
@@ -96,7 +96,7 @@ mod tests {
         let peer_id = provider.peer_id();
         let token = provider.auth_token();
 
-        let provider_task = tokio::task::spawn(async move {
+        tokio::task::spawn(async move {
             provider.run(provider::Options { addr }).await.unwrap();
         });
 
@@ -147,12 +147,6 @@ mod tests {
         }
 
         futures::future::join_all(tasks).await;
-        // for task in tasks {
-        //     task.await??;
-        // }
-
-        provider_task.abort();
-        let _ = provider_task.await;
 
         Ok(())
     }
