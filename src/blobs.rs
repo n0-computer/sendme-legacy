@@ -42,8 +42,8 @@ impl Collection {
         self.total_blobs_size
     }
 
-    pub fn name(&self) -> String {
-        self.name.clone()
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn total_entries(&self) -> u64 {
