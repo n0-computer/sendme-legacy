@@ -77,7 +77,7 @@ mod tests {
         transfer_random_data(file_opts, 4447).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "current_thread")]
     async fn multiple_clients() -> Result<()> {
         let dir: PathBuf = testdir!();
         let filename = "hello_world";
