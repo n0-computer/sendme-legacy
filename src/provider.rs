@@ -139,7 +139,7 @@ async fn handle_stream(
                         size,
                     }) => {
                         debug!("found {}", name.to_hex());
-                        write_response(&mut writer, &mut out_buffer, request.id, Res::Found)
+                        write_response(&mut writer, &mut out_buffer, request.id, Res::Found(*size))
                             .await?;
 
                         debug!("writing data");
