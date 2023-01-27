@@ -216,7 +216,7 @@ async fn main() -> Result<()> {
                     let mut paths = Vec::new();
                     let mut iter = tokio::fs::read_dir(&path).await?;
                     while let Some(el) = iter.next_entry().await? {
-                        if dbg!(el.path()).is_file() {
+                        if el.path().is_file() {
                             paths.push(provider::DataSource::File(el.path()));
                         }
                     }
