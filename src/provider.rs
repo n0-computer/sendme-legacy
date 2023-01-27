@@ -419,11 +419,8 @@ pub async fn create_db(data_sources: Vec<DataSource>) -> Result<(Database, bao::
     let (outboard, hash) = bao::encode::outboard(&data);
     println!("Collection: {}\n", hash.to_hex());
     for el in db.values() {
-        match el {
-            BlobOrCollection::Blob(blob) => {
-                println!("- {}: {} bytes", blob.path.display(), blob.size);
-            }
-            _ => {}
+        if let BlobOrCollection::Blob(blob) = el {
+            println!("- {}: {} bytes", blob.path.display(), blob.size);
         }
     }
     println!();
