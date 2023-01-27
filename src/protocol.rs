@@ -100,12 +100,13 @@ pub async fn read_lp<'a, R: AsyncRead + Unpin, T: Deserialize<'a>>(
 
     let size = usize::try_from(size)?;
     let mut read = 0;
-    while buffer.len() < size {
+    while read != size {
         let r = reader.read_buf(buffer).await?;
-        ensure!(r != 0, "no more data available");
         read += r;
+        if r == 0 {
+            break;
+        }
     }
-    ensure!(size == read, "expected to read {} but read {}", size, read);
     let response: T = postcard::from_bytes(&buffer[..size])?;
     debug!("read message of size {}", size);
 
@@ -123,12 +124,13 @@ pub async fn read_size_data<R: AsyncRead + Unpin>(
     let mut reader = reader.take(size);
     let size = usize::try_from(size)?;
     let mut read = 0;
-    while buffer.len() < size {
+    while read != size {
         let r = reader.read_buf(buffer).await?;
-        ensure!(r != 0, "no more data available");
         read += r;
+        if r == 0 {
+            break;
+        }
     }
-    ensure!(size == read, "expected to read {} but read {}", size, read);
     debug!("finished reading");
     Ok(buffer.split_to(size).freeze())
 }
