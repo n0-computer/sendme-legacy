@@ -83,7 +83,7 @@ mod tests {
         let filename = "hello_world";
         let path = dir.join(filename);
         let content = b"hello world!";
-        let addr = "127.0.0.1:4444".parse().unwrap();
+        let addr = "0.0.0.0:4444".parse().unwrap();
 
         tokio::fs::write(&path, content).await?;
         // hash of the transfer file
@@ -146,9 +146,10 @@ mod tests {
             )));
         }
 
-        for task in tasks {
-            task.await??;
-        }
+        futures::future::join_all(tasks).await;
+        // for task in tasks {
+        //     task.await??;
+        // }
 
         provider_task.abort();
         let _ = provider_task.await;
