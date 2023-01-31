@@ -266,7 +266,7 @@ async fn get_interactive(
         .await;
 
     let pb = ProgressBar::hidden();
-    pb.enable_steady_tick(std::time::Duration::from_millis(1));
+    pb.enable_steady_tick(std::time::Duration::from_millis(50));
     pb.set_style(
         ProgressStyle::with_template(PROGRESS_STYLE)
             .unwrap()
