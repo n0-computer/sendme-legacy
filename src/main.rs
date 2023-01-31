@@ -321,7 +321,6 @@ async fn get_interactive(
             pb.set_message(format!("Receiving {name}..."));
 
             // Wrap the reader to show progress.
-            // FIXME: this is only correct for the single file case atm.
             let mut wrapped_reader = pb.wrap_async_read(&mut reader);
 
             if let Some(ref outpath) = out {
