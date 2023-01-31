@@ -3,7 +3,9 @@ use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use console::style;
-use indicatif::{HumanDuration, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
+use indicatif::{
+    HumanBytes, HumanDuration, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle,
+};
 use is_terminal::IsTerminal;
 use sendme::protocol::AuthToken;
 use sendme::provider::{BlobOrCollection, Ticket};
@@ -303,7 +305,8 @@ async fn get_interactive(
                 .await;
             out_writer
                 .println(format!(
-                    "  {total_entries} file(s) with total transfer size {size}"
+                    "  {total_entries} file(s) with total transfer size {}",
+                    HumanBytes(size)
                 ))
                 .await;
             pb.set_length(size);
@@ -318,7 +321,7 @@ async fn get_interactive(
         let pb = &pb;
         async move {
             let name = name.map_or_else(|| hash.to_string(), |n| n);
-            pb.set_message(format!("Receiving {name}..."));
+            pb.set_message(format!("Receiving '{name}'..."));
 
             // Wrap the reader to show progress.
             let mut wrapped_reader = pb.wrap_async_read(&mut reader);
