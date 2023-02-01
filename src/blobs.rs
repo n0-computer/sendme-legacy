@@ -1,8 +1,9 @@
-use std::io::Read;
-
 use anyhow::{Context, Result};
-use bytes::Bytes;
+use bytes::BytesMut;
 use serde::{Deserialize, Serialize};
+
+use crate::bao_slice_decoder::AsyncSliceDecoder;
+use crate::protocol::read_size_buf;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Collection {
@@ -16,16 +17,18 @@ pub struct Collection {
 }
 
 impl Collection {
-    pub fn decode_from(encoded: Bytes, hash: bao::Hash) -> Result<Self> {
-        // verify that the content of data matches the expected hash
-        let mut decoder = bao::decode::Decoder::new(std::io::Cursor::new(&encoded[..]), &hash);
-        // decoded size can be at most encoded size
-        let mut data = Vec::with_capacity(encoded.len());
-        decoder
-            .read_to_end(&mut data)
-            .context("hash of Collection data does not match")?;
+    pub async fn decode_from<R>(reader: R, hash: bao::Hash, size: u64) -> Result<Self>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let encoded_size = bao::encode::encoded_size(size) as u64;
+
+        let decoder = AsyncSliceDecoder::new(reader, hash, 0, encoded_size);
+        let u_size = usize::try_from(size)?;
+        let mut buf = BytesMut::with_capacity(u_size);
+        read_size_buf(size, decoder, &mut buf).await?;
         let c: Collection =
-            postcard::from_bytes(&data).context("failed to serialize Collection data")?;
+            postcard::from_bytes(&buf).context("failed to serialize Collection data")?;
         Ok(c)
     }
 

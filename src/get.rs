@@ -14,9 +14,7 @@ use tracing::debug;
 
 use crate::bao_slice_decoder::AsyncSliceDecoder;
 use crate::blobs::Collection;
-use crate::protocol::{
-    read_lp_data, read_size_data, write_lp, AuthToken, Handshake, Request, Res, Response,
-};
+use crate::protocol::{read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response};
 use crate::tls::{self, Keypair, PeerId};
 
 const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
@@ -140,13 +138,8 @@ where
 
                         data_len = total_blobs_size;
 
-                        // read entire collection data into buffer
-                        let encoded_size = bao::encode::encoded_size(size) as u64;
-                        let encoded =
-                            read_size_data(encoded_size, &mut reader, &mut in_buffer).await?;
-
                         // decode the collection
-                        let collection = Collection::decode_from(encoded, hash)?;
+                        let collection = Collection::decode_from(&mut reader, hash, size).await?;
                         on_collection(collection.clone()).await?;
 
                         // expect to get blob data in the order they appear in the collection

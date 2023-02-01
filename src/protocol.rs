@@ -83,30 +83,21 @@ pub async fn read_lp<'a, R: AsyncRead + Unpin, T: Deserialize<'a>>(
 ) -> Result<Option<(T, usize)>> {
     // read length prefix
     let size = read_prefix(&mut reader).await?;
-    let mut reader = reader.take(size);
+    read_size_buf(size, reader, buffer).await?;
 
     let size = usize::try_from(size)?;
-    let mut read = 0;
-    while read != size {
-        let r = reader.read_buf(buffer).await?;
-        read += r;
-        if r == 0 {
-            break;
-        }
-    }
     let response: T = postcard::from_bytes(&buffer[..size])?;
     debug!("read message of size {}", size);
 
     Ok(Some((response, size)))
 }
 
-/// Return a buffer for the data, based on a given size, from the given source.
-/// The new buffer is split off from the buffer that is passed into the function.
-pub async fn read_size_data<R: AsyncRead + Unpin>(
+/// Read `size` length of data into the given buffer from the given source.
+pub async fn read_size_buf<R: AsyncRead + Unpin>(
     size: u64,
     reader: R,
     buffer: &mut BytesMut,
-) -> Result<Bytes> {
+) -> Result<()> {
     debug!("reading {}", size);
     let mut reader = reader.take(size);
     let size = usize::try_from(size)?;
@@ -118,8 +109,8 @@ pub async fn read_size_data<R: AsyncRead + Unpin>(
             break;
         }
     }
-    debug!("finished reading");
-    Ok(buffer.split_to(size).freeze())
+    debug!("finished reading into buffer");
+    Ok(())
 }
 
 /// Return a buffer of the data, based on the length prefix, from the given source.
@@ -130,9 +121,9 @@ pub async fn read_lp_data<R: AsyncRead + Unpin>(
 ) -> Result<Option<Bytes>> {
     // read length prefix
     let size = read_prefix(&mut reader).await?;
-
-    let response = read_size_data(size, reader, buffer).await?;
-    Ok(Some(response))
+    read_size_buf(size, reader, buffer).await?;
+    let size = usize::try_from(size)?;
+    Ok(Some(buffer.split_to(size).freeze()))
 }
 
 async fn read_prefix<R: AsyncRead + Unpin>(mut reader: R) -> Result<u64> {
