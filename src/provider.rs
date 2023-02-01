@@ -100,7 +100,7 @@ impl Builder {
             .map_err(|e| anyhow!("{:?}", e))?;
         let listen_addr = server.local_addr().unwrap();
         let db2 = self.db.clone();
-        let (events_sender, events_receiver) = broadcast::channel(8);
+        let (events_sender, _events_receiver) = broadcast::channel(8);
         let events = events_sender.clone();
         let task =
             tokio::spawn(
@@ -113,7 +113,6 @@ impl Builder {
             auth_token: self.auth_token,
             task,
             events,
-            _events_receiver: events_receiver,
         })
     }
 
@@ -125,7 +124,6 @@ impl Builder {
     ) {
         debug!("\nlistening at: {:#?}", server.local_addr().unwrap());
 
-        let _ = events.send(Event::Running);
         while let Some(mut connection) = server.accept().await {
             let db = db.clone();
             let events = events.clone();
@@ -163,14 +161,11 @@ pub struct Provider {
     auth_token: AuthToken,
     task: JoinHandle<()>,
     events: broadcast::Sender<Event>,
-    // Dummy receiver to ensure we don't error.
-    _events_receiver: broadcast::Receiver<Event>,
 }
 
 /// Events emitted by the [`Provider`] informing about the current status.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Running,
     ClientConnected {
         connection_id: u64,
     },

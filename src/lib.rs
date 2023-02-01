@@ -250,7 +250,7 @@ mod tests {
         let _ = provider.join().await;
 
         let events = events_task.await.unwrap();
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 3);
 
         Ok(())
     }
