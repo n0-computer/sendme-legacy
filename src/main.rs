@@ -191,7 +191,7 @@ async fn main() -> Result<()> {
                 vec![provider::DataSource::File(path_buf)]
             };
 
-            let (db, hash) = provider::create_db(sources).await?;
+            let (db, hash) = provider::create_collection(sources).await?;
             let mut builder = provider::Provider::builder(db).keypair(keypair);
             if let Some(addr) = addr {
                 builder = builder.bind_addr(addr);
