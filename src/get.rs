@@ -9,7 +9,7 @@ use postcard::experimental::max_size::MaxSize;
 use s2n_quic::stream::ReceiveStream;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, BufReader};
 use tracing::debug;
 
 use crate::bao_slice_decoder::AsyncSliceDecoder;
@@ -78,8 +78,8 @@ where
     FutA: Future<Output = Result<()>>,
     B: FnMut(Collection) -> FutB,
     FutB: Future<Output = Result<()>>,
-    C: FnMut(bao::Hash, AsyncSliceDecoder<ReceiveStream>, Option<String>) -> FutC,
-    FutC: Future<Output = Result<AsyncSliceDecoder<ReceiveStream>>>,
+    C: FnMut(bao::Hash, AsyncSliceDecoder<BufReader<ReceiveStream>>, Option<String>) -> FutC,
+    FutC: Future<Output = Result<AsyncSliceDecoder<BufReader<ReceiveStream>>>>,
 {
     let now = Instant::now();
     let (_client, mut connection) = setup(opts).await?;
@@ -150,7 +150,7 @@ where
                                 handle_blob_response(blob.hash, reader, &mut in_buffer).await?;
                             let blob_reader =
                                 on_blob(blob.hash, blob_reader, Some(blob.name)).await?;
-                            reader = blob_reader.into_inner();
+                            reader = blob_reader.into_inner().into_inner();
                         }
                     }
 
@@ -196,12 +196,12 @@ where
 /// Returns an `AsyncReader`
 /// The `AsyncReader` can be used to read the content.
 async fn handle_blob_response<
-    R: AsyncRead + futures::io::AsyncRead + Send + Sync + Unpin + 'static,
+    R: AsyncRead + Send + Sync + Unpin + 'static,
 >(
     hash: bao::Hash,
     mut reader: R,
     buffer: &mut BytesMut,
-) -> Result<AsyncSliceDecoder<R>> {
+) -> Result<AsyncSliceDecoder<BufReader<R>>> {
     match read_lp_data(&mut reader, buffer).await? {
         Some(response_buffer) => {
             let response: Response = postcard::from_bytes(&response_buffer)?;
@@ -215,6 +215,7 @@ async fn handle_blob_response<
                 // next blob in collection will be sent over
                 Res::Found => {
                     assert!(buffer.is_empty());
+                    let reader = BufReader::with_capacity(1 << 16, reader);
                     let decoder = AsyncSliceDecoder::new(reader, hash, 0, u64::MAX);
                     Ok(decoder)
                 }

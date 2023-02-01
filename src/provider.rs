@@ -1,5 +1,5 @@
 use std::fmt::{self, Display};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -331,7 +331,15 @@ async fn send_blob<W: AsyncWrite + Unpin + Send + 'static>(
                     size,
                 );
                 let mut reader = std::io::BufReader::with_capacity(1 << 16, slice_extractor);
-                let _copied = std::io::copy(&mut reader, &mut wrapper)?;
+                loop {
+                    let mut buf = [0u8; 1 << 16];
+                    let n = reader.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    wrapper.write_all(&buf[..n])?;
+                }
+                // let _copied = std::io::copy(&mut reader, &mut wrapper)?;
                 std::io::Result::Ok(writer)
             })
             .await??;
