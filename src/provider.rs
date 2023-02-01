@@ -325,13 +325,14 @@ async fn send_blob<W: AsyncWrite + Unpin + Send + 'static>(
                 let file_reader = std::fs::File::open(&path)?;
                 let outboard_reader = std::io::Cursor::new(outboard);
                 let mut wrapper = SyncIoBridge::new(&mut writer);
-                let mut slice_extractor = bao::encode::SliceExtractor::new_outboard(
+                let slice_extractor = bao::encode::SliceExtractor::new_outboard(
                     file_reader,
                     outboard_reader,
                     0,
                     size,
                 );
-                let _copied = std::io::copy(&mut slice_extractor, &mut wrapper)?;
+                let mut reader = std::io::BufReader::with_capacity(1 << 16, slice_extractor);
+                let _copied = std::io::copy(&mut reader, &mut wrapper)?;
                 std::io::Result::Ok(writer)
             })
             .await??;
