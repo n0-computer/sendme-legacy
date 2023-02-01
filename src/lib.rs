@@ -69,6 +69,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perf_big_file() -> Result<()> {
+        let port: u16 = 4445;
+
+        let size = 1024 * 1024 * 1024;
+        transfer_random_data(vec![("hello_world", size)], port).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn perf_many_files() -> Result<()> {
+        let port: u16 = 4445;
+
+        let sizes = (0..128)
+            .map(|i| (format!("hello world {i}"), 1024 * 1024 * 8))
+            .collect();
+        transfer_random_data(sizes, port).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn empty_files() -> Result<()> {
         // try to transfer as many files as possible without hitting a limit
         // booo 400 is too small :(
