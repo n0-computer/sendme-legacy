@@ -41,9 +41,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webpki = "0.22"
 x509-parser = "0.14"
 zeroize = "1.5"
+num_cpus = "1.0"
 
 
 [dev-dependencies]
 proptest = "1.0.0"
 rand = "0.7"
 testdir = "0.7.1"
+
+[profile.release]
+codegen-units = 1 
+lto = true    
+strip = true  
+panic = "abort" 

@@ -92,9 +92,14 @@ impl Builder {
             .with_max_open_local_bidirectional_streams(MAX_STREAMS)?
             .with_max_open_remote_bidirectional_streams(MAX_STREAMS)?;
 
+        let io = s2n_quic::provider::io::tokio::Builder::default()
+            .with_receive_address(self.bind_addr)?
+            .with_reuse_port()?
+            .build()?;
+
         let server = QuicServer::builder()
             .with_tls(tls)?
-            .with_io(self.bind_addr)?
+            .with_io(io)?
             .with_limits(limits)?
             .start()
             .map_err(|e| anyhow!("{:?}", e))?;

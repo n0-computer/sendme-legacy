@@ -89,7 +89,8 @@ struct OutWriter {
 impl OutWriter {
     pub fn new() -> Self {
         let stderr = std::io::stderr();
-        let is_atty = stderr.is_terminal();
+        // let is_atty = stderr.is_terminal();
+        let is_atty = true;
         let stderr = tokio::io::stderr();
         Self {
             is_atty,
@@ -158,66 +159,93 @@ async fn main() -> Result<()> {
             auth_token,
             key,
         } => {
-            let out_writer = OutWriter::new();
-            let keypair = get_keypair(key).await?;
-
-            let mut tmp_path = None;
-
-            let sources = if let Some(path) = path {
-                out_writer
-                    .println(format!("Reading {}", path.display()))
-                    .await;
-                if path.is_dir() {
-                    let mut paths = Vec::new();
-                    let mut iter = tokio::fs::read_dir(&path).await?;
-                    while let Some(el) = iter.next_entry().await? {
-                        if el.path().is_file() {
-                            paths.push(provider::DataSource::File(el.path()));
-                        }
-                    }
-                    paths
-                } else if path.is_file() {
-                    vec![provider::DataSource::File(path)]
-                } else {
-                    bail!("path must be either a Directory or a File");
-                }
-            } else {
-                // Store STDIN content into a temporary file
-                let (file, path) = tempfile::NamedTempFile::new()?.into_parts();
-                let mut file = tokio::fs::File::from_std(file);
-                let path_buf = path.to_path_buf();
-                tmp_path = Some(path);
-                tokio::io::copy(&mut tokio::io::stdin(), &mut file).await?;
-                vec![provider::DataSource::File(path_buf)]
-            };
-
-            let (db, hash) = provider::create_collection(sources).await?;
-            let mut builder = provider::Provider::builder(db).keypair(keypair);
-            if let Some(addr) = addr {
-                builder = builder.bind_addr(addr);
+            let mut handlers = Vec::new();
+            for i in 0..num_cpus::get() {
+                let pc = path.clone();
+                let ac = addr.clone();
+                let atc = auth_token.clone();
+                let kc = key.clone();
+                let h = std::thread::spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(serve(pc, ac, atc, kc));
+                });
+                handlers.push(h);
             }
-            if let Some(ref hex) = auth_token {
-                let auth_token = AuthToken::from_str(hex)?;
-                builder = builder.auth_token(auth_token);
+            for h in handlers {
+                h.join().unwrap();
             }
-            let provider = builder.spawn()?;
-
-            out_writer
-                .println(format!("PeerID: {}", provider.peer_id()))
-                .await;
-            out_writer
-                .println(format!("Auth token: {}", provider.auth_token()))
-                .await;
-            out_writer
-                .println(format!("All-in-one ticket: {}", provider.ticket(hash)))
-                .await;
-            provider.join().await?;
-
-            // Drop tempath to signal it can be destroyed
-            drop(tmp_path);
         }
     }
 
+    Ok(())
+}
+
+async fn serve(
+    path: Option<PathBuf>,
+    addr: Option<SocketAddr>,
+    auth_token: Option<String>,
+    key: Option<PathBuf>,
+) -> Result<()> {
+    let out_writer = OutWriter::new();
+    let keypair = get_keypair(key).await?;
+
+    let mut tmp_path = None;
+
+    let sources = if let Some(path) = path {
+        out_writer
+            .println(format!("Reading {}", path.display()))
+            .await;
+        if path.is_dir() {
+            let mut paths = Vec::new();
+            let mut iter = tokio::fs::read_dir(&path).await?;
+            while let Some(el) = iter.next_entry().await? {
+                if el.path().is_file() {
+                    paths.push(provider::DataSource::File(el.path()));
+                }
+            }
+            paths
+        } else if path.is_file() {
+            vec![provider::DataSource::File(path)]
+        } else {
+            bail!("path must be either a Directory or a File");
+        }
+    } else {
+        // Store STDIN content into a temporary file
+        let (file, path) = tempfile::NamedTempFile::new()?.into_parts();
+        let mut file = tokio::fs::File::from_std(file);
+        let path_buf = path.to_path_buf();
+        tmp_path = Some(path);
+        tokio::io::copy(&mut tokio::io::stdin(), &mut file).await?;
+        vec![provider::DataSource::File(path_buf)]
+    };
+
+    let (db, hash) = provider::create_collection(sources).await?;
+    let mut builder = provider::Provider::builder(db).keypair(keypair);
+    if let Some(addr) = addr {
+        builder = builder.bind_addr(addr);
+    }
+    if let Some(ref hex) = auth_token {
+        let auth_token = AuthToken::from_str(hex)?;
+        builder = builder.auth_token(auth_token);
+    }
+    let provider = builder.spawn()?;
+
+    out_writer
+        .println(format!("PeerID: {}", provider.peer_id()))
+        .await;
+    out_writer
+        .println(format!("Auth token: {}", provider.auth_token()))
+        .await;
+    out_writer
+        .println(format!("All-in-one ticket: {}", provider.ticket(hash)))
+        .await;
+    provider.join().await?;
+
+    // Drop tempath to signal it can be destroyed
+    drop(tmp_path);
     Ok(())
 }
 
@@ -357,6 +385,7 @@ async fn get_interactive(
     out_writer
         .println(format!("Done in {}", HumanDuration(stats.elapsed)))
         .await;
+    out_writer.println(format!("{:?}", stats)).await;
 
     Ok(())
 }
