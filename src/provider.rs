@@ -12,7 +12,7 @@ use s2n_quic::stream::BidirectionalStream;
 use s2n_quic::Server as QuicServer;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::io::SyncIoBridge;
 use tracing::{debug, warn};
@@ -103,10 +103,17 @@ impl Builder {
         let db2 = self.db.clone();
         let (events_sender, _events_receiver) = broadcast::channel(8);
         let events = events_sender.clone();
-        let task =
-            tokio::spawn(
-                async move { Self::run(server, db2, self.auth_token, events_sender).await },
-            );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            Self::run(
+                server,
+                db2,
+                self.auth_token,
+                events_sender,
+                shutdown_receiver,
+            )
+            .await
+        });
 
         Ok(Provider {
             listen_addr,
@@ -114,6 +121,7 @@ impl Builder {
             auth_token: self.auth_token,
             task,
             events,
+            shutdown: shutdown_sender,
         })
     }
 
@@ -122,28 +130,36 @@ impl Builder {
         db: Database,
         token: AuthToken,
         events: broadcast::Sender<Event>,
+        mut shutdown: oneshot::Receiver<()>,
     ) {
         debug!("\nlistening at: {:#?}", server.local_addr().unwrap());
 
-        while let Some(mut connection) = server.accept().await {
-            let db = db.clone();
-            let events = events.clone();
-            tokio::spawn(async move {
-                debug!("connection accepted from {:?}", connection.remote_addr());
-                while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
-                    let _ = events.send(Event::ClientConnected {
-                        connection_id: connection.id(),
-                    });
+        loop {
+            tokio::select! {
+                Some(mut connection) = server.accept() => {
                     let db = db.clone();
                     let events = events.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = handle_stream(db, token, stream, events).await {
-                            warn!("error: {:#?}", err);
+                        debug!("connection accepted from {:?}", connection.remote_addr());
+                        while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
+                            let _ = events.send(Event::ClientConnected {
+                                connection_id: connection.id(),
+                            });
+                            let db = db.clone();
+                            let events = events.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = handle_stream(db, token, stream, events).await {
+                                    warn!("error: {:#?}", err);
+                                }
+                                debug!("disconnected");
+                            });
                         }
-                        debug!("disconnected");
                     });
                 }
-            });
+                _ = &mut shutdown => {
+                    break;
+                }
+            }
         }
     }
 }
@@ -163,6 +179,7 @@ pub struct Provider {
     auth_token: AuthToken,
     task: JoinHandle<()>,
     events: broadcast::Sender<Event>,
+    shutdown: oneshot::Sender<()>,
 }
 
 /// Events emitted by the [`Provider`] informing about the current status.
@@ -228,17 +245,10 @@ impl Provider {
         }
     }
 
-    /// Blocks until the provider task completes.
-    // TODO: Maybe implement Future directly?
-    pub async fn join(self) -> Result<(), JoinError> {
+    /// Gracefully shuts down the provider.
+    pub async fn shutdown(self) -> Result<(), JoinError> {
+        let _ = self.shutdown.send(());
         self.task.await
-    }
-
-    /// Aborts the provider.
-    ///
-    /// TODO: temporary, do graceful shutdown instead.
-    pub fn abort(&self) {
-        self.task.abort();
     }
 }
 

@@ -240,10 +240,9 @@ mod tests {
         )
         .await?;
 
-        provider.abort();
-        let _ = provider.join().await;
+        provider.shutdown().await?;
 
-        let events = events_task.await.unwrap();
+        let events = events_task.await?;
         assert_eq!(events.len(), 3);
 
         Ok(())
