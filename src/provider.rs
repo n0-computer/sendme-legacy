@@ -28,7 +28,7 @@ pub type Database = Arc<HashMap<bao::Hash, BlobOrCollection>>;
 
 /// Builder for the [`Provider`].
 ///
-/// You must supply a database which can be created using [`create_db`], everything else is
+/// You must supply a database which can be created using [`create_collection`], everything else is
 /// optional.  Finally you can create and run the provider by calling [`Builder::spawn`].
 ///
 /// The returned [`Provider`] provides [`Provider::join`] to wait for the spawned task.

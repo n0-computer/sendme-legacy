@@ -16,10 +16,9 @@ use crate::bao_slice_decoder::AsyncSliceDecoder;
 use crate::blobs::Collection;
 use crate::protocol::{
     read_bao_encoded, read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response,
+    MAX_MESSAGE_SIZE,
 };
 use crate::tls::{self, Keypair, PeerId};
-
-const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -129,10 +128,10 @@ where
                     // server is sending over a collection of blobs
                     Res::FoundCollection { total_blobs_size } => {
                         ensure!(
-                            total_blobs_size <= MAX_DATA_SIZE,
+                            total_blobs_size <= MAX_MESSAGE_SIZE,
                             "size too large: {} > {}",
                             total_blobs_size,
-                            MAX_DATA_SIZE
+                            MAX_MESSAGE_SIZE
                         );
 
                         data_len = total_blobs_size;

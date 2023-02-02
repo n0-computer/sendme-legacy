@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::bao_slice_decoder::AsyncSliceDecoder;
 
 /// Maximum message size is limited to 100MiB for now.
-const MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 100;
+pub const MAX_MESSAGE_SIZE: u64 = 1024 * 1024 * 100;
 
 pub const VERSION: u64 = 1;
 
@@ -60,7 +60,7 @@ pub enum Res {
 /// Write the given data to the provider sink, with a unsigned varint length prefix.
 pub async fn write_lp<W: AsyncWrite + Unpin>(writer: &mut W, data: &[u8]) -> Result<()> {
     ensure!(
-        data.len() < MAX_MESSAGE_SIZE,
+        data.len() < MAX_MESSAGE_SIZE as usize,
         "sending message is too large"
     );
 
@@ -80,30 +80,21 @@ pub async fn read_lp<'a, R: AsyncRead + Unpin, T: Deserialize<'a>>(
 ) -> Result<Option<(T, usize)>> {
     // read length prefix
     let size = read_prefix(&mut reader).await?;
-    let mut reader = reader.take(size);
-
+    read_size_buf(size, reader, buffer).await?;
     let size = usize::try_from(size)?;
-    let mut read = 0;
-    while read != size {
-        let r = reader.read_buf(buffer).await?;
-        read += r;
-        if r == 0 {
-            break;
-        }
-    }
     let response: T = postcard::from_bytes(&buffer[..size])?;
     debug!("read message of size {}", size);
 
     Ok(Some((response, size)))
 }
 
-/// Return a buffer for the data, based on a given size, from the given source.
-/// The new buffer is split off from the buffer that is passed into the function.
-pub async fn read_size_data<R: AsyncRead + Unpin>(
+/// Read `size` length of data into the given buffer from the given reader.
+pub async fn read_size_buf<R: AsyncRead + Unpin>(
     size: u64,
     reader: R,
     buffer: &mut BytesMut,
-) -> Result<Bytes> {
+) -> Result<()> {
+    ensure!(size < MAX_MESSAGE_SIZE, "receiving message is too large");
     debug!("reading {}", size);
     let mut reader = reader.take(size);
     let size = usize::try_from(size)?;
@@ -115,8 +106,8 @@ pub async fn read_size_data<R: AsyncRead + Unpin>(
             break;
         }
     }
-    debug!("finished reading");
-    Ok(buffer.split_to(size).freeze())
+    debug!("finished reading into buffer");
+    Ok(())
 }
 
 /// Read and decode the given bao encoded data from the provided source.
@@ -139,9 +130,10 @@ pub async fn read_lp_data<R: AsyncRead + Unpin>(
 ) -> Result<Option<Bytes>> {
     // read length prefix
     let size = read_prefix(&mut reader).await?;
-
-    let response = read_size_data(size, reader, buffer).await?;
-    Ok(Some(response))
+    // read data into buffer
+    read_size_buf(size, reader, buffer).await?;
+    let size = usize::try_from(size)?;
+    Ok(Some(buffer.split_to(size).freeze()))
 }
 
 async fn read_prefix<R: AsyncRead + Unpin>(mut reader: R) -> Result<u64> {
