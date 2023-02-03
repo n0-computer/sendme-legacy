@@ -9,7 +9,7 @@ use indicatif::{
 use sendme::protocol::AuthToken;
 use sendme::provider::Ticket;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use sendme::{get, provider, util, Keypair, PeerId};
@@ -205,9 +205,7 @@ async fn main() -> Result<()> {
                 .println(format!("All-in-one ticket: {}", provider.ticket(hash)))
                 .await;
 
-            let (s, mut r) = mpsc::channel(1);
-            ctrlc::set_handler(move || s.try_send(()).expect("failed to send shutdown signal"))?;
-            r.recv().await;
+            tokio::signal::ctrl_c().await?;
             out_writer.println("Shutting down...").await;
             provider.shutdown().await?;
 

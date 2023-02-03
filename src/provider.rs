@@ -136,6 +136,12 @@ impl Builder {
 
         loop {
             tokio::select! {
+                biased;
+
+                _ = &mut shutdown => {
+                    break;
+                }
+
                 Some(mut connection) = server.accept() => {
                     let db = db.clone();
                     let events = events.clone();
@@ -155,9 +161,6 @@ impl Builder {
                             });
                         }
                     });
-                }
-                _ = &mut shutdown => {
-                    break;
                 }
             }
         }
