@@ -5,15 +5,17 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use bao::encode::SliceExtractor;
 use bytes::{Bytes, BytesMut};
+use derivative::Derivative;
 use s2n_quic::stream::BidirectionalStream;
-use s2n_quic::Server as QuicServer;
+use s2n_quic::{Connection, Server as QuicServer};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast;
 use tokio::task::{JoinError, JoinHandle};
+use tokio_context::context::{Context, Handle as ContextHandle, RefContext};
 use tokio_util::io::SyncIoBridge;
 use tracing::{debug, warn};
 
@@ -103,16 +105,9 @@ impl Builder {
         let db2 = self.db.clone();
         let (events_sender, _events_receiver) = broadcast::channel(8);
         let events = events_sender.clone();
-        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            Self::run(
-                server,
-                db2,
-                self.auth_token,
-                events_sender,
-                shutdown_receiver,
-            )
-            .await
+        let (ctx, handle) = RefContext::new();
+        let task = tokio::task::spawn(async move {
+            Self::run(ctx, server, db2, self.auth_token, events_sender).await
         });
 
         Ok(Provider {
@@ -121,47 +116,76 @@ impl Builder {
             auth_token: self.auth_token,
             task,
             events,
-            shutdown: shutdown_sender,
+            handle,
         })
     }
 
     async fn run(
+        ctx: RefContext,
         mut server: s2n_quic::server::Server,
         db: Database,
         token: AuthToken,
         events: broadcast::Sender<Event>,
-        mut shutdown: oneshot::Receiver<()>,
     ) {
         debug!("\nlistening at: {:#?}", server.local_addr().unwrap());
+        let (mut current_ctx, _handle) = Context::with_parent(&ctx, None);
 
         loop {
             tokio::select! {
-                biased;
-
-                _ = &mut shutdown => {
-                    break;
+                _ = current_ctx.done() => {
+                    return;
                 }
 
-                Some(mut connection) = server.accept() => {
+                Some(connection) = server.accept() => {
                     let db = db.clone();
                     let events = events.clone();
-                    tokio::spawn(async move {
-                        debug!("connection accepted from {:?}", connection.remote_addr());
-                        while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
-                            let _ = events.send(Event::ClientConnected {
-                                connection_id: connection.id(),
-                            });
-                            let db = db.clone();
-                            let events = events.clone();
-                            tokio::spawn(async move {
-                                if let Err(err) = handle_stream(db, token, stream, events).await {
-                                    warn!("error: {:#?}", err);
-                                }
-                                debug!("disconnected");
-                            });
-                        }
-                    });
+                    let (current_ctx, _handle) = RefContext::with_parent(&ctx, None);
+                    tokio::spawn(async move { handle_connection(current_ctx, connection, db, token, events).await });
                 }
+            }
+        }
+    }
+}
+
+async fn handle_connection(
+    ctx: RefContext,
+    mut connection: Connection,
+    db: Database,
+    token: AuthToken,
+    events: broadcast::Sender<Event>,
+) {
+    debug!("connection accepted from {:?}", connection.remote_addr());
+    let (mut current_ctx, _handle) = Context::with_parent(&ctx, None);
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = current_ctx.done() => {
+                break;
+            }
+            Ok(Some(stream)) = connection.accept_bidirectional_stream() => {
+                let _ = events.send(Event::ClientConnected {
+                    connection_id: connection.id(),
+                });
+                let db = db.clone();
+                let events = events.clone();
+                let (mut current_ctx, _handle) = Context::with_parent(&ctx, None);
+
+                tokio::spawn(async move {
+                    tokio::select! {
+                        biased;
+
+                        _ = current_ctx.done() => {
+                            return;
+                        }
+                        res = handle_stream(db, token, stream, events) => {
+                            if let Err(err) = res {
+                                warn!("error: {:#?}", err);
+                            }
+                        }
+                    }
+                    debug!("disconnected");
+                });
             }
         }
     }
@@ -175,14 +199,16 @@ impl Builder {
 /// is a shorthand to create a suitable [`Builder`].
 ///
 /// This runs a tokio task which can be aborted and joined if desired.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Provider {
     listen_addr: SocketAddr,
     keypair: Keypair,
     auth_token: AuthToken,
     task: JoinHandle<()>,
     events: broadcast::Sender<Event>,
-    shutdown: oneshot::Sender<()>,
+    #[derivative(Debug = "ignore")]
+    handle: ContextHandle,
 }
 
 /// Events emitted by the [`Provider`] informing about the current status.
@@ -250,7 +276,7 @@ impl Provider {
 
     /// Gracefully shuts down the provider.
     pub async fn shutdown(self) -> Result<(), JoinError> {
-        let _ = self.shutdown.send(());
+        self.handle.cancel();
         self.task.await
     }
 }
