@@ -129,7 +129,7 @@ where
     FutC: Future<Output = Result<DataStream>>,
 {
     let now = Instant::now();
-    let mut connection = setup(opts).await?;
+    let connection = setup(opts).await?;
 
     let (mut writer, mut reader) = connection.open_bi().await?;
 
