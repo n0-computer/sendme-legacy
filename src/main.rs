@@ -299,11 +299,15 @@ async fn get_interactive(
             Ok(())
         }
     };
-    let on_blob = |hash: blake3::Hash, mut reader, name: Option<String>| {
+    let on_blob = |hash: blake3::Hash, mut reader, name: String| {
         let out = &out;
         let pb = &pb;
         async move {
-            let name = name.map_or_else(|| hash.to_string(), |n| n);
+            let name = if name.is_empty() {
+                hash.to_string()
+            } else {
+                name
+            };
             pb.set_message(format!("Receiving '{name}'..."));
 
             // Wrap the reader to show progress.

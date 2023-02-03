@@ -6,18 +6,22 @@ use anyhow::{anyhow, bail, ensure, Result};
 use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
-use s2n_quic::stream::ReceiveStream;
 use s2n_quic::Connection;
 use s2n_quic::{client::Connect, Client};
 use tokio::io::AsyncRead;
 use tracing::debug;
 
-use crate::bao_slice_decoder::AsyncSliceDecoder;
 use crate::blobs::Collection;
 use crate::protocol::{
     read_bao_encoded, read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response,
 };
 use crate::tls::{self, Keypair, PeerId};
+
+// These types are used in the callbacks for get.
+pub use bao::Hash;
+pub use s2n_quic::stream::ReceiveStream;
+
+pub use crate::bao_slice_decoder::AsyncSliceDecoder;
 
 const MAX_DATA_SIZE: u64 = 1024 * 1024 * 1024;
 
@@ -78,7 +82,7 @@ where
     FutA: Future<Output = Result<()>>,
     B: FnMut(Collection) -> FutB,
     FutB: Future<Output = Result<()>>,
-    C: FnMut(bao::Hash, AsyncSliceDecoder<ReceiveStream>, Option<String>) -> FutC,
+    C: FnMut(bao::Hash, AsyncSliceDecoder<ReceiveStream>, String) -> FutC,
     FutC: Future<Output = Result<AsyncSliceDecoder<ReceiveStream>>>,
 {
     let now = Instant::now();
@@ -160,8 +164,7 @@ where
                                 "downloaded more than {total_blobs_size}"
                             );
                             remaining_size -= size;
-                            let blob_reader =
-                                on_blob(blob.hash, blob_reader, Some(blob.name)).await?;
+                            let blob_reader = on_blob(blob.hash, blob_reader, blob.name).await?;
                             reader = blob_reader.into_inner();
                         }
                     }

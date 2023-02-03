@@ -86,7 +86,7 @@ mod tests {
         // hash of the transfer file
         let data = tokio::fs::read(&path).await?;
         let (_, expect_hash) = bao::encode::outboard(&data);
-        let expect_name = Some(filename.to_string());
+        let expect_name = filename.to_string();
 
         let (db, hash) =
             provider::create_collection(vec![provider::DataSource::File(path)]).await?;
@@ -96,7 +96,7 @@ mod tests {
             hash: bao::Hash,
             token: AuthToken,
             file_hash: bao::Hash,
-            name: Option<String>,
+            name: String,
             addr: SocketAddr,
             peer_id: PeerId,
             content: Vec<u8>,
@@ -105,8 +105,8 @@ mod tests {
                 addr,
                 peer_id: Some(peer_id),
             };
-            let name = name.as_ref();
             let content = &content;
+            let name = &name;
             get::run(
                 hash,
                 token,
@@ -118,7 +118,7 @@ mod tests {
                     let mut got = Vec::new();
                     reader.read_to_end(&mut got).await?;
                     assert_eq!(content, &got);
-                    assert_eq!(name, got_name.as_ref());
+                    assert_eq!(*name, got_name);
 
                     Ok(reader)
                 },
@@ -187,7 +187,7 @@ mod tests {
             files.push(provider::DataSource::File(path.clone()));
 
             // keep track of expected values
-            expects.push((Some(name), path, hash));
+            expects.push((name, path, hash));
         }
 
         let (db, collection_hash) = provider::create_collection(files).await?;
