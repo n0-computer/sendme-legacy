@@ -50,15 +50,17 @@ async fn setup(opts: Options) -> Result<quinn::Connection> {
     let keypair = Keypair::generate();
 
     let tls_client_config = tls::make_client_config(&keypair, opts.peer_id)?;
-    let client_config = quinn::ClientConfig::new(Arc::new(tls_client_config));
+    let mut client_config = quinn::ClientConfig::new(Arc::new(tls_client_config));
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())?;
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.keep_alive_interval(Some(Duration::from_secs(1)));
+    client_config.transport_config(Arc::new(transport_config));
+
     endpoint.set_default_client_config(client_config);
 
     debug!("connecting to {}", opts.addr);
     let connect = endpoint.connect(opts.addr, "localhost")?;
     let connection = connect.await?;
-
-    // TODO: keepalive?
 
     Ok(connection)
 }

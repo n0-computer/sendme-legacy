@@ -29,8 +29,8 @@ use crate::protocol::{read_lp, write_lp, AuthToken, Handshake, Request, Res, Res
 use crate::tls::{self, Keypair, PeerId};
 use crate::util::{self, Hash};
 
-// const MAX_CONNECTIONS: u64 = 1024;
-// const MAX_STREAMS: u64 = 10;
+const MAX_CONNECTIONS: u32 = 1024;
+const MAX_STREAMS: u64 = 10;
 
 /// Database containing content-addressed data (blobs or collections).
 #[derive(Debug, Clone)]
@@ -102,9 +102,15 @@ impl Builder {
     /// get information about it.
     pub fn spawn(self) -> Result<Provider> {
         let tls_server_config = tls::make_server_config(&self.keypair)?;
-        let server_config = quinn::ServerConfig::with_crypto(Arc::new(tls_server_config));
+        let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(tls_server_config));
+        let mut transport_config = quinn::TransportConfig::default();
+        transport_config
+            .max_concurrent_bidi_streams(MAX_STREAMS.try_into()?)
+            .max_concurrent_uni_streams(0u32.into());
 
-        // TODO: Limits
+        server_config
+            .transport_config(Arc::new(transport_config))
+            .concurrent_connections(MAX_CONNECTIONS);
 
         let endpoint = quinn::Endpoint::server(server_config, self.bind_addr)?;
         let listen_addr = endpoint.local_addr().unwrap();
