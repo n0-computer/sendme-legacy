@@ -192,7 +192,7 @@ mod tests {
 
         let (db, collection_hash) = provider::create_collection(files).await?;
 
-        let addr = format!("127.0.0.1:0").parse().unwrap();
+        let addr = "127.0.0.1:0".parse().unwrap();
         let provider = provider::Provider::builder(db).bind_addr(addr).spawn()?;
         let mut provider_events = provider.subscribe();
         let events_task = tokio::task::spawn(async move {
