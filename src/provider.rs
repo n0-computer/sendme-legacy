@@ -548,7 +548,7 @@ pub async fn create_collection(data_sources: Vec<DataSource>) -> Result<(Databas
     let data = postcard::to_slice(&c, &mut buffer)?;
     let (outboard, hash) = bao::encode::outboard(&data);
     let hash = Hash::from(hash);
-    println!("Collection: {}\n", hash);
+    println!("Collection: {hash}\n");
     for el in db.values() {
         if let BlobOrCollection::Blob(blob) = el {
             println!("- {}: {} bytes", blob.path.display(), blob.size);
