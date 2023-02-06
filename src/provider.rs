@@ -35,9 +35,9 @@ pub type Database = Arc<HashMap<Hash, BlobOrCollection>>;
 /// You must supply a database which can be created using [`create_collection`], everything else is
 /// optional.  Finally you can create and run the provider by calling [`Builder::spawn`].
 ///
-/// The returned [`Provider`] provides [`Provider::join`] to wait for the spawned task.
-/// Currently it needs to be aborted using [`Provider::abort`], graceful shutdown will be
-/// implemented in the immediate future.
+/// The returned [`Provider`] is awaitable to know when it finishes.  Currently it needs to
+/// be aborted using [`Provider::abort`], graceful shutdown will be implemented in the
+/// future.
 #[derive(Debug)]
 pub struct Builder {
     bind_addr: SocketAddr,
