@@ -351,8 +351,9 @@ async fn get_interactive(
             .expect("failed to listen for `ctrl-c`");
         let clean_up = clean_up_clone.lock().await;
         for tmp_file in clean_up.iter() {
-            //  warn no permission err
-            let _ = tokio::fs::remove_file(tmp_file).await;
+            if let Err(e) = tokio::fs::remove_file(tmp_file).await {
+                tracing::warn!("could not remove temporary file {tmp_file:?}: {e}");
+            }
         }
         std::process::exit(0);
     });
