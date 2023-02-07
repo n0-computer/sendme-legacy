@@ -285,6 +285,11 @@ impl Provider {
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
     }
+
+    /// Gives you a [`CancellationToken`] that you can use to shutdown the provider
+    pub fn cancel(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
 }
 
 /// The future completes when the spawned tokio task finishes.

@@ -1,4 +1,4 @@
-use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -239,8 +239,6 @@ async fn main() -> Result<()> {
             let out_writer = OutWriter::new();
             let keypair = get_keypair(key).await?;
 
-            let mut tmp_path = None;
-
             let sources = if let Some(path) = path {
                 out_writer
                     .println(format!("Reading {}", path.display()))
@@ -264,7 +262,14 @@ async fn main() -> Result<()> {
                 let (file, path) = tempfile::NamedTempFile::new()?.into_parts();
                 let mut file = tokio::fs::File::from_std(file);
                 let path_buf = path.to_path_buf();
-                tmp_path = Some(path);
+                // ensure we clean up temporary file after shutdown
+                tokio::spawn(async move {
+                    tokio::signal::ctrl_c()
+                        .await
+                        .expect("failed to listen for `ctrl-c`");
+                    // Drop path to signal it can be destroyed
+                    drop(path);
+                });
                 tokio::io::copy(&mut tokio::io::stdin(), &mut file).await?;
                 vec![path_buf.into()]
             };
@@ -285,6 +290,13 @@ async fn main() -> Result<()> {
                 builder = builder.auth_token(auth_token);
             }
             let provider = builder.spawn()?;
+            let cancel_token = provider.cancel();
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("failed to listen for `ctrl-c`");
+                cancel_token.cancel();
+            });
 
             out_writer
                 .println(format!("PeerID: {}", provider.peer_id()))
@@ -296,9 +308,6 @@ async fn main() -> Result<()> {
                 .println(format!("All-in-one ticket: {}", provider.ticket(hash)))
                 .await;
             provider.await?;
-
-            // Drop tempath to signal it can be destroyed
-            drop(tmp_path);
         }
     }
 
@@ -332,6 +341,22 @@ async fn get_interactive(
     token: AuthToken,
     out: Option<PathBuf>,
 ) -> Result<()> {
+    let clean_up: Arc<Mutex<Vec<std::path::PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+    let clean_up_clone = clean_up.clone();
+
+    // clean up temporary files on early shutdown
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for `ctrl-c`");
+        let clean_up = clean_up_clone.lock().await;
+        for tmp_file in clean_up.iter() {
+            //  warn no permission err
+            let _ = tokio::fs::remove_file(tmp_file).await;
+        }
+        std::process::exit(0);
+    });
+
     let out_writer = OutWriter::new();
     out_writer.println(format!("Fetching: {hash}")).await;
 
@@ -388,9 +413,12 @@ async fn get_interactive(
             Ok(())
         }
     };
+
+    let clean_up_clone = clean_up.clone();
     let on_blob = |hash: Hash, mut reader, name: String| {
         let out = &out;
         let pb = &pb;
+        let clean_up = clean_up_clone.clone();
         async move {
             let name = if name.is_empty() {
                 hash.to_string()
@@ -419,6 +447,12 @@ async fn get_interactive(
                     Ok::<_, anyhow::Error>((temp_file, dup))
                 })
                 .await??;
+
+                {
+                    let mut clean_up = clean_up.lock().await;
+                    (*clean_up).push(temp_file.path().to_path_buf());
+                }
+
                 let file = tokio::fs::File::from_std(dup);
                 let mut file_buf = tokio::io::BufWriter::new(file);
                 tokio::io::copy(&mut wrapped_reader, &mut file_buf).await?;
