@@ -101,12 +101,12 @@ dependencies = [
 [[package]]
 name = "bao"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3663af8a469bf3a2d818b8c1a7b62e4dc55c4547b4c14f5dab35fc9e707bef83"
+source = "git+https://github.com/n0-computer/bao?branch=sendme#b29dad017adfd4d1c12ecd174e5262fd8e4815c7"
 dependencies = [
  "arrayref",
  "arrayvec",
  "blake3",
+ "tokio 1.25.0",
 ]
 
 [[package]]

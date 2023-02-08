@@ -137,7 +137,7 @@ pub(crate) async fn read_bao_encoded<R: AsyncRead + Unpin>(
     reader: R,
     hash: Hash,
 ) -> Result<Vec<u8>> {
-    let mut decoder = AsyncSliceDecoder::new(reader, hash.into(), 0, u64::MAX);
+    let mut decoder = AsyncSliceDecoder::new(reader, &hash.into(), 0, u64::MAX);
     // we don't know the size yet, so we just allocate a reasonable amount
     let mut decoded = Vec::with_capacity(4096);
     decoder.read_to_end(&mut decoded).await?;

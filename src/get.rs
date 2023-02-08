@@ -10,13 +10,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Result};
+// use bao::decode::AsyncSliceDecoder;
+use crate::bao_slice_decoder::AsyncSliceDecoder;
 use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 use tracing::debug;
 
-use crate::bao_slice_decoder::AsyncSliceDecoder;
 use crate::blobs::Collection;
 use crate::protocol::{
     read_bao_encoded, read_lp_data, write_lp, AuthToken, Handshake, Request, Res, Response,
@@ -91,7 +92,7 @@ pub struct DataStream(AsyncSliceDecoder<quinn::RecvStream>);
 
 impl DataStream {
     fn new(inner: quinn::RecvStream, hash: Hash) -> Self {
-        DataStream(AsyncSliceDecoder::new(inner, hash.into(), 0, u64::MAX))
+        DataStream(AsyncSliceDecoder::new(inner, &hash.into(), 0, u64::MAX))
     }
 
     async fn read_size(&mut self) -> io::Result<u64> {

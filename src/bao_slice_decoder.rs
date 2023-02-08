@@ -517,9 +517,9 @@ impl<R: tokio::io::AsyncRead + Unpin> AsyncSliceDecoder<R> {
     /// If you want to decode an entire file and do not know the length, it is OK to pass
     /// 0 as the start and u64::MAX as the length. The length will then be truncated to
     /// the actual length of the stream, which is the first 8 bytes of the stream.
-    pub fn new(inner: R, hash: blake3::Hash, start: u64, len: u64) -> Self {
+    pub fn new(inner: R, hash: &blake3::Hash, start: u64, len: u64) -> Self {
         Self {
-            inner: SliceValidator::new(inner, hash, start, len),
+            inner: SliceValidator::new(inner, *hash, start, len),
             current_item: None,
         }
     }
@@ -597,6 +597,7 @@ impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for AsyncSliceDecoder
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bao::decode::AsyncSliceDecoder;
     use bao::encode::SliceExtractor;
     use futures::StreamExt;
     use proptest::prelude::*;
@@ -677,14 +678,14 @@ mod tests {
 
         // test validation and reading - without reading size
         let mut cursor = std::io::Cursor::new(&encoded);
-        let mut reader = AsyncSliceDecoder::new(&mut cursor, hash, 0, len);
+        let mut reader = AsyncSliceDecoder::new(&mut cursor, &hash, 0, len);
         let mut data = vec![];
         reader.read_to_end(&mut data).await.unwrap();
         assert_eq!(data, test_data);
 
         // test validation and reading - with reading size
         let mut cursor = std::io::Cursor::new(&encoded);
-        let mut reader = AsyncSliceDecoder::new(&mut cursor, hash, 0, len);
+        let mut reader = AsyncSliceDecoder::new(&mut cursor, &hash, 0, len);
         assert_eq!(reader.read_size().await.unwrap(), test_data.len() as u64);
         let mut data = vec![];
         reader.read_to_end(&mut data).await.unwrap();
@@ -699,7 +700,7 @@ mod tests {
         let mut cursor = std::io::Cursor::new(&encoded_with_garbage);
 
         // check that reading with a size > end works
-        let mut reader = AsyncSliceDecoder::new(&mut cursor, hash, 0, u64::MAX);
+        let mut reader = AsyncSliceDecoder::new(&mut cursor, &hash, 0, u64::MAX);
         assert_eq!(reader.read_size().await.unwrap(), test_data.len() as u64);
         let mut data = vec![];
         reader.read_to_end(&mut data).await.unwrap();
@@ -755,7 +756,7 @@ mod tests {
         assert_eq!(cursor.position(), slice.len() as u64);
 
         let mut cursor = std::io::Cursor::new(&slice);
-        let mut reader = AsyncSliceDecoder::new(&mut cursor, hash, slice_start, slice_len);
+        let mut reader = AsyncSliceDecoder::new(&mut cursor, &hash, slice_start, slice_len);
         assert_eq!(reader.read_size().await.unwrap(), test_data.len() as u64);
         let mut data = vec![];
         reader.read_to_end(&mut data).await.unwrap();
@@ -801,12 +802,12 @@ mod tests {
     /// manual tests for decode_all for a few interesting cases
     #[test]
     fn test_decode_all_manual() {
-        // test_decode_all_impl(0);
+        test_decode_all_impl(0);
         test_decode_all_impl(1);
-        // test_decode_all_impl(1024);
-        // test_decode_all_impl(1025);
-        // test_decode_all_impl(2049);
-        // test_decode_all_impl(12343465);
+        test_decode_all_impl(1024);
+        test_decode_all_impl(1025);
+        test_decode_all_impl(2049);
+        test_decode_all_impl(12343465);
     }
 
     /// manual tests for decode_part for a few interesting cases
