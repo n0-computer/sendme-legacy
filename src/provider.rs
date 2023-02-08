@@ -419,6 +419,7 @@ async fn handle_stream(
                                 break;
                             }
                         }
+                        writer.finish().await?;
                         let _ = events.send(Event::TransferCompleted {
                             connection_id,
                             request_id: request.id,
