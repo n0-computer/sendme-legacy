@@ -4,16 +4,14 @@ use std::io;
 use std::str::FromStr;
 
 use anyhow::{ensure, Result};
+use bao::decode::AsyncSliceDecoder;
 use bytes::{Bytes, BytesMut};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
-use crate::{
-    bao_slice_decoder::AsyncSliceDecoder,
-    util::{self, Hash},
-};
+use crate::util::{self, Hash};
 
 /// Maximum message size is limited to 100MiB for now.
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 100;

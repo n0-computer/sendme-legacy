@@ -10,8 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Result};
-// use bao::decode::AsyncSliceDecoder;
-use crate::bao_slice_decoder::AsyncSliceDecoder;
+use bao::decode::AsyncSliceDecoder;
 use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
