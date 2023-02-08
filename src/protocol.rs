@@ -228,7 +228,6 @@ pub(crate) enum Closed {
     /// Used implicitly when a [`quinn::RecvStream`] is dropped without explicit call to
     /// [`quinn::RecvStream::stop`].  We don't use this explicitly but this is here as
     /// documentation as to what happened to `0`.
-    #[allow(dead_code)]
     StreamDropped = 0,
     /// The provider is terminating.
     ///
@@ -267,6 +266,7 @@ impl TryFrom<VarInt> for Closed {
 
     fn try_from(value: VarInt) -> std::result::Result<Self, Self::Error> {
         match value.into_inner() {
+            0 => Ok(Self::StreamDropped),
             1 => Ok(Self::ProviderTerminating),
             2 => Ok(Self::RequestReceived),
             val => Err(UnknownErrorCode(val)),
