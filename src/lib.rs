@@ -28,11 +28,10 @@ mod tests {
     use tokio::fs;
     use tokio::io::{self, AsyncReadExt};
 
-    use crate::{protocol::AuthToken, provider::Event, util::Hash};
-    use crate::{
-        provider::{create_collection, Provider},
-        tls::PeerId,
-    };
+    use crate::protocol::AuthToken;
+    use crate::provider::{create_collection, Event, Provider};
+    use crate::tls::PeerId;
+    use crate::util::Hash;
 
     use super::*;
 
