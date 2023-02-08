@@ -216,12 +216,13 @@ async fn main() -> Result<()> {
             let token =
                 AuthToken::from_str(&token).context("Wrong format for authentication token")?;
             tokio::select! {
+                biased;
+                res = get_interactive(*hash.as_hash(), opts, token, out) => {
+                    res
+                }
                 _ = tokio::signal::ctrl_c() => {
                     println!("Ending transfer early...");
                     Ok(())
-                }
-                res = get_interactive(*hash.as_hash(), opts, token, out) => {
-                    res
                 }
             }
         }
@@ -237,12 +238,13 @@ async fn main() -> Result<()> {
                 peer_id: Some(peer),
             };
             tokio::select! {
+                biased;
+                res = get_interactive(hash, opts, token, out) => {
+                    res
+                }
                 _ = tokio::signal::ctrl_c() => {
                     println!("Ending transfer early...");
                     Ok(())
-                }
-                res = get_interactive(hash, opts, token, out) => {
-                    res
                 }
             }
         }
@@ -253,12 +255,13 @@ async fn main() -> Result<()> {
             key,
         } => {
             tokio::select! {
+                biased;
+                res = provide_interactive(path, addr, auth_token, key) => {
+                    res
+                }
                 _ = tokio::signal::ctrl_c() => {
                     println!("\nShutting down provider...");
                     Ok(())
-                }
-                res = provide_interactive(path, addr, auth_token, key) => {
-                    res
                 }
             }
         }
