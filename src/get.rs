@@ -158,6 +158,8 @@ where
         let used = postcard::to_slice(&req, &mut out_buffer)?;
         write_lp(&mut writer, used).await?;
     }
+    writer.finish().await?;
+    drop(writer);
 
     // 3. Read response
     {
@@ -224,11 +226,7 @@ where
                 }
 
                 // Shut down the stream
-                debug!("shutting down stream");
-                writer.finish().await.or_else(|err| match err {
-                    quinn::WriteError::Stopped(_) | quinn::WriteError::ConnectionLost(_) => Ok(()),
-                    _ => Err(err),
-                })?;
+                drop(reader);
 
                 let elapsed = now.elapsed();
 
@@ -237,7 +235,7 @@ where
                 Ok(stats)
             }
             None => {
-                bail!("provider disconnected");
+                bail!("provider closed stream");
             }
         }
     }

@@ -19,6 +19,7 @@ mod tests {
         net::SocketAddr,
         path::PathBuf,
         sync::{atomic::AtomicUsize, Arc},
+        time::Duration,
     };
 
     use anyhow::{anyhow, Context, Result};
@@ -209,7 +210,13 @@ mod tests {
         let events_task = tokio::task::spawn(async move {
             let mut events = Vec::new();
             while let Ok(event) = provider_events.recv().await {
-                events.push(event);
+                match event {
+                    Event::TransferCompleted { .. } => {
+                        events.push(event);
+                        break;
+                    }
+                    _ => events.push(event),
+                }
             }
             events
         });
@@ -250,10 +257,14 @@ mod tests {
         )
         .await?;
 
+        // We have to wait for the completed event before shutting down the provider.
+        let events = tokio::time::timeout(Duration::from_secs(30), events_task)
+            .await
+            .expect("duration expired")
+            .expect("events task failed");
         provider.shutdown();
-        provider.await.ok(); // .abort() makes this a Result::Err
+        provider.await?;
 
-        let events = events_task.await.unwrap();
         assert_eq!(events.len(), 3);
 
         Ok(())
