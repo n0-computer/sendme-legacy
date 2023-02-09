@@ -329,4 +329,57 @@ mod tests {
         // Unwrap the JoinHandle, then the result of the Provider
         supervisor.await.unwrap().unwrap();
     }
+
+    #[tokio::test]
+    async fn test_blob_reader_partial() {
+        // Prepare a Provider transferring a file.
+        let dir = testdir!();
+        let src0 = dir.join("src0");
+        let src1 = dir.join("src1");
+        let src0_data = {
+            let mut content = vec![0u8; 10000];
+            rand::thread_rng().fill_bytes(&mut content);
+            content
+        };
+        println!("{src0_data:?}");
+        fs::write(&src0, &src0_data).await.unwrap();
+        fs::write(&src1, "hello world").await.unwrap();
+        let (db, hash) = create_collection(vec![src0.into(), src1.into()])
+            .await
+            .unwrap();
+        let provider = Provider::builder(db)
+            .bind_addr("127.0.0.1:0".parse().unwrap())
+            .spawn()
+            .unwrap();
+        let auth_token = provider.auth_token();
+        let provider_addr = provider.listen_addr();
+
+        get::run(
+            hash,
+            auth_token,
+            get::Options {
+                addr: provider_addr,
+                peer_id: None,
+            },
+            || async move { Ok(()) },
+            |_collection| async move { Ok(()) },
+            |_hash, mut stream, name| async move {
+                if name == "src0" {
+                    // evil: do nothing with the stream!
+                } else {
+                    let mut buf = Vec::new();
+                    io::copy(&mut stream, &mut buf).await?;
+
+                    // I was expecting to find "hello there" here.
+                    assert_eq!(dbg!(buf), b"hello world");
+                }
+                Ok(stream)
+            },
+        )
+        .await
+        .unwrap();
+
+        // If the test fails we leak the provider task...
+        provider.shutdown();
+    }
 }

@@ -207,7 +207,10 @@ where
                                 "downloaded more than {total_blobs_size}"
                             );
                             remaining_size -= size;
-                            let blob_reader = on_blob(blob.hash, blob_reader, blob.name).await?;
+                            let mut blob_reader =
+                                on_blob(blob.hash, blob_reader, blob.name).await?;
+
+                            tokio::io::copy(&mut blob_reader, &mut tokio::io::sink()).await?;
                             reader = blob_reader.into_inner();
                         }
                     }
