@@ -94,6 +94,17 @@ impl DataStream {
         DataStream(AsyncSliceDecoder::new(inner, hash.into(), 0, u64::MAX))
     }
 
+    /// The total size that will be read from this stream
+    ///
+    /// Note that to read the size, we need to read at least the first 8 bytes.
+    /// So calling this method will consume at least the first 8 bytes of the stream.
+    ///
+    /// The total size is the data size plus hash overhead plus the 8 byte header.
+    async fn read_total_size(&mut self) -> io::Result<u64> {
+        let content_size = self.read_size().await?;
+        Ok(bao::encode::encoded_size(content_size).try_into().unwrap())
+    }
+
     async fn read_size(&mut self) -> io::Result<u64> {
         self.0.read_size().await
     }
