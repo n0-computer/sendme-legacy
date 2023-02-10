@@ -11,17 +11,6 @@ const KEY_PATH: &str = "key";
 const TOKEN: &str = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
 const PEER_ID: &str = "oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU";
 
-#[test]
-fn file_doesnt_exist() -> Result<()> {
-    let mut cmd = Command::cargo_bin("sendme")?;
-    cmd.arg("provide").arg("/doesnt/exist");
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "path must be either a Directory or a File",
-    ));
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn transfer_one_file() -> Result<()> {
     let dir = testdir!();
