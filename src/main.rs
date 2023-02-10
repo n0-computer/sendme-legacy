@@ -35,7 +35,7 @@ enum Commands {
         addr: Option<SocketAddr>,
         /// Auth token, defaults to random generated.
         #[clap(long)]
-        auth_token: Option<String>,
+        token: Option<String>,
         /// If this path is provided and it exists, the private key is read from this file and used, if it does not exist the private key will be persisted to this location.
         #[clap(long)]
         key: Option<PathBuf>,
@@ -251,12 +251,12 @@ async fn main() -> Result<()> {
         Commands::Provide {
             path,
             addr,
-            auth_token,
+            token,
             key,
         } => {
             tokio::select! {
                 biased;
-                res = provide_interactive(path, addr, auth_token, key) => {
+                res = provide_interactive(path, addr, token, key) => {
                     res
                 }
                 _ = tokio::signal::ctrl_c() => {
