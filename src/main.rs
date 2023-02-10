@@ -309,7 +309,9 @@ async fn provide_interactive(
 
     let (db, hash) = provider::create_collection(sources).await?;
 
-    println!("Collection: {}\n", Blake3Cid::new(hash));
+    out_writer
+        .println(format!("Collection: {}\n", Blake3Cid::new(hash)))
+        .await;
     for (_, path, size) in db.blobs() {
         println!("- {}: {} bytes", path.display(), size);
     }
