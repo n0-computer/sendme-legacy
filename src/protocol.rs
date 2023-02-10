@@ -216,7 +216,7 @@ impl FromStr for AuthToken {
 /// Reasons to close connections or stop streams.
 ///
 /// A QUIC **connection** can be *closed* and a **stream** can request the other side to
-/// *stop* sending data.  Both these associate and `error_code` with that operation, closing
+/// *stop* sending data.  Both closing and stopping have an associated `error_code`, closing
 /// also adds a `reason` as some arbitrary bytes.
 ///
 /// This enum exists so we have a single namespace for `error_code`s used.
