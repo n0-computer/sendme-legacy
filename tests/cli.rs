@@ -1,7 +1,9 @@
+use std::io::Read;
+use std::process::{Command, Stdio};
+
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
-use std::process::Command;
 use testdir::testdir;
 
 #[test]
@@ -28,7 +30,7 @@ mQ0vpZ9N2/qFNiryPKqVAAAAAAECAwQF
 
     let peer_id = "oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU";
     let auth_token = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
-    let collection_hash = "bafkr4ie23o4uzjpjs7siacb2cjiqnnugrpdqa3dnawbesmqlddfc4buw4i";
+    let collection_hash = "bafkr4ihztdqpllivflhsxdg77kzsbw757znfee3ybdncqvxqwdi2jpbtsy";
 
     // use random
     let addr = "127.0.0.1:43333";
@@ -39,45 +41,52 @@ mQ0vpZ9N2/qFNiryPKqVAAAAAAECAwQF
 
     let path = dir.join("hello_world");
     tokio::fs::write(&path, "hello world!").await?;
-    let mut prov_cmd = Command::cargo_bin("sendme")?;
+    let mut cmd = Command::cargo_bin("sendme")?;
 
-    prov_cmd
+    cmd.stderr(Stdio::piped())
         .arg("provide")
         .arg(path)
         .arg("--key")
         .arg(key_path)
-        .arg("--token")
+        .arg("--auth-token")
         .arg(auth_token)
         .arg("--addr")
         .arg(addr);
 
-    let mut provide_process = prov_cmd.spawn()?;
+    let mut provide_process = cmd.spawn()?;
 
     // TRY: using same cmd
     let out_dir = dir.join("out");
-    let mut get_cmd = Command::cargo_bin("sendme")?;
-    get_cmd
-        .arg("get")
+    let mut cmd = Command::cargo_bin("sendme")?;
+    cmd.arg("get")
         .arg(collection_hash)
         .arg("--peer")
         .arg(peer_id)
-        .arg("--token")
+        .arg("--auth-token")
         .arg(auth_token)
         .arg("--addr")
         .arg(addr)
         .arg("--out")
         .arg(out_dir);
 
-    get_cmd
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("woooo"));
+    cmd.assert().success().stderr(predicate::str::contains(
+        "Fetching: bafkr4ihztdqpllivflhsxdg77kzsbw757znfee3ybdncqvxqwdi2jpbtsy
+[1/3] Connecting ...
+[2/3] Requesting ...
+[3/3] Downloading collection...
+  1 file(s) with total transfer size 12B
+Done in 0 seconds",
+    ));
 
-    // test output for get side
-    // test output for provide side
-    // test files are the same
-    // test file is saved in the correct spot
+    let mut output_reader = provide_process.stderr.take().unwrap();
     provide_process.kill()?;
+    let mut output = String::new();
+    output_reader.read_to_string(&mut output)?;
+    assert!(predicates::str::starts_with("Reading").eval(&output));
+    assert!(predicates::str::ends_with("PeerID: oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU
+Auth token: uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0
+All-in-one ticket: IPmY4PWtFSrPK4zf-rMg2_3-WlITeAjaKFbwsNGkvDOWIKCtjuLfLcMant5lIr_2kXbNmQ0vpZ9N2_qFNiryPKqVAH8AAAHF0gK7J9kskfFeHKsvdPYUbvBqICHbXgfR8RPFWrMB1gcZfQ
+").eval(&output));
     Ok(())
 }
 

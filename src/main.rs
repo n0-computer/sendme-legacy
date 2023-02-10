@@ -35,7 +35,7 @@ enum Commands {
         addr: Option<SocketAddr>,
         /// Auth token, defaults to random generated.
         #[clap(long)]
-        token: Option<String>,
+        auth_token: Option<String>,
         /// If this path is provided and it exists, the private key is read from this file and used, if it does not exist the private key will be persisted to this location.
         #[clap(long)]
         key: Option<PathBuf>,
@@ -50,7 +50,7 @@ enum Commands {
         peer: PeerId,
         /// The authentication token to present to the server.
         #[clap(long)]
-        token: String,
+        auth_token: String,
         /// Optional address of the provider, defaults to 127.0.0.1:4433.
         #[clap(long, short)]
         addr: Option<SocketAddr>,
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
         Commands::Get {
             hash,
             peer,
-            token,
+            auth_token,
             addr,
             out,
         } => {
@@ -213,11 +213,11 @@ async fn main() -> Result<()> {
             if let Some(addr) = addr {
                 opts.addr = addr;
             }
-            let token =
-                AuthToken::from_str(&token).context("Wrong format for authentication token")?;
+            let auth_token = AuthToken::from_str(&auth_token)
+                .context("Wrong format for authentication token")?;
             tokio::select! {
                 biased;
-                res = get_interactive(*hash.as_hash(), opts, token, out) => {
+                res = get_interactive(*hash.as_hash(), opts, auth_token, out) => {
                     res
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -231,7 +231,7 @@ async fn main() -> Result<()> {
                 hash,
                 peer,
                 addr,
-                token,
+                token: auth_token,
             } = ticket;
             let opts = get::Options {
                 addr,
@@ -239,7 +239,7 @@ async fn main() -> Result<()> {
             };
             tokio::select! {
                 biased;
-                res = get_interactive(hash, opts, token, out) => {
+                res = get_interactive(hash, opts, auth_token, out) => {
                     res
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -251,12 +251,12 @@ async fn main() -> Result<()> {
         Commands::Provide {
             path,
             addr,
-            token,
+            auth_token,
             key,
         } => {
             tokio::select! {
                 biased;
-                res = provide_interactive(path, addr, token, key) => {
+                res = provide_interactive(path, addr, auth_token, key) => {
                     res
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -364,7 +364,7 @@ async fn get_keypair(key: Option<PathBuf>) -> Result<Keypair> {
 async fn get_interactive(
     hash: Hash,
     opts: get::Options,
-    token: AuthToken,
+    auth_token: AuthToken,
     out: Option<PathBuf>,
 ) -> Result<()> {
     let out_writer = OutWriter::new();
@@ -476,7 +476,7 @@ async fn get_interactive(
             Ok(reader)
         }
     };
-    let stats = get::run(hash, token, opts, on_connected, on_collection, on_blob).await?;
+    let stats = get::run(hash, auth_token, opts, on_connected, on_collection, on_blob).await?;
 
     pb.finish_and_clear();
     out_writer
