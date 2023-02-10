@@ -85,11 +85,13 @@ All-in-one ticket: IAd4Oh_1zRiR6aoo-3HH3iUbIAJgRu0p1RFoy4ikt26PIKCtjuLfLcMant5lI
 }
 
 #[test]
+#[ignore]
 fn transfer_from_stdin() -> Result<()> {
     todo!();
 }
 
 #[test]
+#[ignore]
 fn transfer_to_stdout() -> Result<()> {
     todo!();
 }
