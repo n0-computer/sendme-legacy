@@ -51,6 +51,7 @@ rand = "0.7"
 testdir = "0.7.1"
 assert_cmd = "2.0.8"
 predicates = "2.1.5"
+expect-test = "1.4.0"
 
 [features]
 default = ["cli"]

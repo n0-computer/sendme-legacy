@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
@@ -18,7 +18,7 @@ async fn transfer_one_file() -> Result<()> {
 
     let opts = TransferOptions {
     addr: "127.0.0.1:43333",
-    path: "transfer/hello_world", 
+    path: PathBuf::from("transfer/hello_world"),
     key: KEY_PATH,
     token: TOKEN,
     peer_id: PEER_ID,
@@ -30,7 +30,8 @@ async fn transfer_one_file() -> Result<()> {
 [3/3] Downloading collection...
   1 file(s) with total transfer size 13B
 Done in 0 seconds",
-expected_provide_stderr: "Collection: bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4
+expected_provide_stderr: "Reading [PATH]
+Collection: bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4
 
 PeerID: oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU
 Auth token: uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0
@@ -49,7 +50,7 @@ async fn transfer_folder() -> Result<()> {
 
     let opts = TransferOptions {
     addr: "127.0.0.1:43334",
-    path: "transfer", 
+    path: "transfer".parse()?, 
     key: KEY_PATH,
     token: TOKEN,
     peer_id: PEER_ID,
@@ -61,7 +62,8 @@ async fn transfer_folder() -> Result<()> {
 [3/3] Downloading collection...
   2 file(s) with total transfer size 25B
 Done in 0 seconds",
-expected_provide_stderr: "Collection: bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4
+expected_provide_stderr: "Reading [PATH]
+Collection: bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4
 
 PeerID: oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU
 Auth token: uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0
@@ -90,7 +92,7 @@ struct TransferOptions<'a> {
     // Maybe output the addr to the provider's stderr & parsing the output to get the address?
     addr: &'a str,
     // `path` is appended to `sendme/tests/fixtures`
-    path: &'a str,
+    path: PathBuf,
     key: &'a str,
     token: &'a str,
     peer_id: &'a str,
@@ -100,17 +102,28 @@ struct TransferOptions<'a> {
     expected_provide_stderr: &'a str,
 }
 
+struct ProvideProcess {
+    child: Child,
+}
+
+impl Drop for ProvideProcess {
+    fn drop(&mut self) {
+        self.child.kill().unwrap();
+    }
+}
+
 async fn transfer_cmd(opts: TransferOptions<'_>) -> Result<()> {
     let mut cmd = Command::cargo_bin("sendme")?;
 
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures");
+    let path = src.join(opts.path);
 
     cmd.stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .arg("provide")
-        .arg(src.join(opts.path))
+        .arg(&path)
         .arg("--key")
         .arg(src.join(opts.key))
         .arg("--auth-token")
@@ -118,26 +131,30 @@ async fn transfer_cmd(opts: TransferOptions<'_>) -> Result<()> {
         .arg("--addr")
         .arg(opts.addr);
 
-    let mut provide_process = cmd.spawn()?;
+    let (get_assert, mut output_reader) = {
+        let mut provide_process = ProvideProcess {
+            child: cmd.spawn()?,
+        };
 
-    let mut cmd = Command::cargo_bin("sendme")?;
-    cmd.arg("get")
-        .arg(opts.hash)
-        .arg("--peer")
-        .arg(opts.peer_id)
-        .arg("--auth-token")
-        .arg(opts.token)
-        .arg("--addr")
-        .arg(opts.addr)
-        .arg("--out")
-        .arg(opts.out);
+        let mut cmd = Command::cargo_bin("sendme")?;
+        cmd.arg("get")
+            .arg(opts.hash)
+            .arg("--peer")
+            .arg(opts.peer_id)
+            .arg("--auth-token")
+            .arg(opts.token)
+            .arg("--addr")
+            .arg(opts.addr)
+            .arg("--out")
+            .arg(opts.out);
 
-    cmd.assert()
-        .success()
-        .stderr(predicate::str::contains(opts.expected_get_stderr));
+        let get_assert = cmd.assert();
 
-    let mut output_reader = provide_process.stderr.take().unwrap();
-    provide_process.kill()?;
+        // the the output before we drop the `provide_process`
+        let output_reader = provide_process.child.stderr.take().unwrap();
+        (get_assert, output_reader)
+    };
+
     let mut output = String::new();
     output_reader.read_to_string(&mut output)?;
 
@@ -145,10 +162,34 @@ async fn transfer_cmd(opts: TransferOptions<'_>) -> Result<()> {
     // command, since we need the `provider` to be a longer running process
     // I can use a predicate to see if the output "ends_with" the `opts.expected_provide_stderr`
     // but then we don't get nice output to display what is different between the two strs
-    let output = {
-        let i = output.find("Collection").unwrap();
-        &output[i..]
-    };
+    let redact_path = tokio::fs::canonicalize(&path).await?;
+    let output = output.replace(redact_path.to_str().unwrap(), "[PATH]");
     assert_eq!(output, opts.expected_provide_stderr);
+    get_assert
+        .success()
+        .stderr(predicate::str::contains(opts.expected_get_stderr));
+    compare_files(path, opts.out)?;
+    Ok(())
+}
+
+fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) -> Result<()> {
+    // if dir, get filename,  come up with paths for expect and got
+    // call compare_files() on each
+    // if file, open files & assert_eq
+    let expect_path = expect_path.as_ref();
+    let got_dir_path = got_dir_path.as_ref();
+    if expect_path.is_dir() {
+        let paths = std::fs::read_dir(expect_path)?;
+        for entry in paths {
+            let entry = entry?;
+            compare_files(entry.path(), got_dir_path)?;
+        }
+    } else {
+        let file_name = expect_path.file_name().unwrap();
+        let expect = std::fs::read_to_string(expect_path)?;
+        let got = std::fs::read_to_string(got_dir_path.join(file_name))?;
+        assert_eq!(expect, got);
+    }
+
     Ok(())
 }
