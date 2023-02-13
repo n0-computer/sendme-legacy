@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_blob_reader_partial() {
+    async fn test_blob_reader_partial() -> Result<()> {
         // Prepare a Provider transferring a file.
         let dir = testdir!();
         let src0 = dir.join("src0");
@@ -341,45 +341,40 @@ mod tests {
             rand::thread_rng().fill_bytes(&mut content);
             content
         };
-        println!("{src0_data:?}");
-        fs::write(&src0, &src0_data).await.unwrap();
-        fs::write(&src1, "hello world").await.unwrap();
-        let (db, hash) = create_collection(vec![src0.into(), src1.into()])
-            .await
-            .unwrap();
+        fs::write(&src0, &src0_data).await?;
+        fs::write(&src1, "hello world").await?;
+        let (db, hash) = create_collection(vec![src0.into(), src1.into()]).await?;
         let provider = Provider::builder(db)
             .bind_addr("127.0.0.1:0".parse().unwrap())
-            .spawn()
-            .unwrap();
+            .spawn()?;
         let auth_token = provider.auth_token();
         let provider_addr = provider.listen_addr();
 
-        get::run(
-            hash,
-            auth_token,
-            get::Options {
-                addr: provider_addr,
-                peer_id: None,
-            },
-            || async move { Ok(()) },
-            |_collection| async move { Ok(()) },
-            |_hash, mut stream, name| async move {
-                if name == "src0" {
+        let timeout = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            get::run(
+                hash,
+                auth_token,
+                get::Options {
+                    addr: provider_addr,
+                    peer_id: None,
+                },
+                || async move { Ok(()) },
+                |_collection| async move { Ok(()) },
+                |_hash, stream, _name| async move {
                     // evil: do nothing with the stream!
-                } else {
-                    let mut buf = Vec::new();
-                    io::copy(&mut stream, &mut buf).await?;
-
-                    // I was expecting to find "hello there" here.
-                    assert_eq!(dbg!(buf), b"hello world");
-                }
-                Ok(stream)
-            },
+                    Ok(stream)
+                },
+            ),
         )
-        .await
-        .unwrap();
-
-        // If the test fails we leak the provider task...
+        .await;
         provider.shutdown();
+
+        let err = timeout.expect(
+            "`get` function is hanging, make sure we are handling misbehaving `on_blob` functions",
+        );
+
+        err.expect_err("expected an error when passing in a misbehaving `on_blob` function");
+        Ok(())
     }
 }

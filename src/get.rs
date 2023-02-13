@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tracing::debug;
 
 use crate::bao_slice_decoder::AsyncSliceDecoder;
@@ -210,7 +210,9 @@ where
                             let mut blob_reader =
                                 on_blob(blob.hash, blob_reader, blob.name).await?;
 
-                            tokio::io::copy(&mut blob_reader, &mut tokio::io::sink()).await?;
+                            if blob_reader.read_exact(&mut [0u8; 1]).await.is_ok() {
+                                bail!("`on_blob` callback did not fully read the blob content")
+                            }
                             reader = blob_reader.into_inner();
                         }
                     }
