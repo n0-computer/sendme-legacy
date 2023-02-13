@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tracing::debug;
 
 use crate::bao_slice_decoder::AsyncSliceDecoder;

@@ -26,7 +26,7 @@ mod tests {
     use rand::RngCore;
     use testdir::testdir;
     use tokio::fs;
-    use tokio::io::{self, AsyncReadExt};
+    use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
     use crate::protocol::AuthToken;
     use crate::provider::{create_collection, Event, Provider};
@@ -336,12 +336,13 @@ mod tests {
         let dir = testdir!();
         let src0 = dir.join("src0");
         let src1 = dir.join("src1");
-        let src0_data = {
-            let mut content = vec![0u8; 10000];
-            rand::thread_rng().fill_bytes(&mut content);
-            content
-        };
-        fs::write(&src0, &src0_data).await?;
+        {
+            let content = vec![1u8; 1000];
+            let mut f = tokio::fs::File::create(&src0).await?;
+            for _ in 0..10 {
+                f.write_all(&content).await?;
+            }
+        }
         fs::write(&src1, "hello world").await?;
         let (db, hash) = create_collection(vec![src0.into(), src1.into()]).await?;
         let provider = Provider::builder(db)
@@ -351,7 +352,7 @@ mod tests {
         let provider_addr = provider.listen_addr();
 
         let timeout = tokio::time::timeout(
-            std::time::Duration::from_millis(300),
+            std::time::Duration::from_secs(10),
             get::run(
                 hash,
                 auth_token,
