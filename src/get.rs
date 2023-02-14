@@ -158,7 +158,6 @@ where
         let used = postcard::to_slice(&req, &mut out_buffer)?;
         write_lp(&mut writer, used).await?;
     }
-    dbg!(writer.finish().await)?;
     drop(writer);
 
     // 3. Read response
