@@ -9,10 +9,11 @@
 //! terminal applications.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::Poll;
 
+use portable_atomic::{AtomicU16, AtomicU64};
 use tokio::io::{self, AsyncRead};
 use tokio::sync::broadcast;
 
@@ -139,5 +140,61 @@ where
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    use super::*;
+
+    #[test]
+    fn test_inc() {
+        let progress = ProgressEmitter::new(160, 16);
+        let mut rx = progress.subscribe();
+
+        progress.inc(1);
+        assert_eq!(progress.inner.count.load(Ordering::Relaxed), 1);
+        let res = rx.try_recv();
+        assert!(matches!(res, Err(TryRecvError::Empty)));
+
+        progress.inc(9);
+        assert_eq!(progress.inner.count.load(Ordering::Relaxed), 10);
+        let res = rx.try_recv();
+        assert!(matches!(res, Ok(1)));
+
+        progress.inc(30);
+        assert_eq!(progress.inner.count.load(Ordering::Relaxed), 40);
+        let res = rx.try_recv();
+        assert!(matches!(res, Ok(4)));
+
+        progress.inc(120);
+        assert_eq!(progress.inner.count.load(Ordering::Relaxed), 160);
+        let res = rx.try_recv();
+        assert!(matches!(res, Ok(16)));
+    }
+
+    #[tokio::test]
+    async fn test_async_reader() {
+        // Note that the broadcast::Receiver has 16 slots, pushing more into them without
+        // consuming will result in a (Try)RecvError::Lagged.
+        let progress = ProgressEmitter::new(160, 16);
+        let mut rx = progress.subscribe();
+
+        let data = [1u8; 100];
+        let mut wrapped_reader = progress.wrap_async_read(&data[..]);
+        io::copy(&mut wrapped_reader, &mut io::sink())
+            .await
+            .unwrap();
+
+        // Most likely this test will invoke a single AsyncRead::poll_read and thus only a
+        // single event will be emitted.  But we can not really rely on this and can only
+        // check the last value.
+        let mut current = 0;
+        while let Ok(val) = rx.try_recv() {
+            current = val;
+        }
+        assert_eq!(current, 10);
     }
 }
