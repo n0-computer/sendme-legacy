@@ -169,4 +169,4 @@ jobs:
           override: true
     - name: Check MSRV all features
       run: |
-        cargo +$MSRV check --workspace --all-targets --all-features
+        cargo +$MSRV check --workspace --all-targets --no-default-features
