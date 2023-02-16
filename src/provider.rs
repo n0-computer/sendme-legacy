@@ -408,7 +408,8 @@ async fn handle_stream(
 
                 let mut data = BytesMut::from(&encoded[..]);
                 writer.write_buf(&mut data).await?;
-                for blob in c.blobs {
+                for (i, blob) in c.blobs.iter().enumerate() {
+                    debug!("writing blob {}/{}", i, c.blobs.len());
                     let (status, writer1) =
                         send_blob(db.clone(), blob.hash, writer, &mut out_buffer, request.id)
                             .await?;
@@ -417,7 +418,7 @@ async fn handle_stream(
                         break;
                     }
                 }
-
+                debug!("all blobs written");
                 writer.finish().await?;
                 let _ = events.send(Event::TransferCompleted {
                     connection_id,

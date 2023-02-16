@@ -27,6 +27,7 @@ mod tests {
     use testdir::testdir;
     use tokio::fs;
     use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+    use tracing_subscriber::{prelude::*, EnvFilter};
 
     use crate::protocol::AuthToken;
     use crate::provider::{create_collection, Event, Provider};
@@ -271,6 +272,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_close() {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .with(EnvFilter::from_default_env())
+            .init();
+
+        for _ in 0..100 {
+            inner_test().await;
+        }
+    }
+    async fn inner_test() {
         // Prepare a Provider transferring a file.
         let dir = testdir!();
         let src = dir.join("src");
@@ -288,11 +299,12 @@ mod tests {
         let supervisor = tokio::spawn(async move {
             let mut events = provider.subscribe();
             loop {
+                println!("supervisor: loop");
                 tokio::select! {
                     biased;
                     res = &mut provider => break res.context("provider failed"),
                     maybe_event = events.recv() => {
-                        match maybe_event {
+                        match dbg!(maybe_event) {
                             Ok(event) => {
                                 match event {
                                     Event::TransferCompleted { .. } => provider.shutdown(),
@@ -309,6 +321,7 @@ mod tests {
             }
         });
 
+        println!("get");
         get::run(
             hash,
             auth_token,
@@ -319,13 +332,16 @@ mod tests {
             || async move { Ok(()) },
             |_collection| async move { Ok(()) },
             |_hash, mut stream, _name| async move {
+                println!("copying");
                 io::copy(&mut stream, &mut io::sink()).await?;
+                println!("copy done");
                 Ok(stream)
             },
         )
         .await
         .unwrap();
 
+        println!("wait for supervisor");
         // Unwrap the JoinHandle, then the result of the Provider
         supervisor.await.unwrap().unwrap();
     }
