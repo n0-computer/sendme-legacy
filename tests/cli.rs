@@ -4,102 +4,147 @@ use std::process::{Child, Command, Stdio};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
-use predicates::prelude::*;
 use testdir::testdir;
 
 const KEY_PATH: &str = "key";
 const TOKEN: &str = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
 const PEER_ID: &str = "oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU";
+const FOLDER_HASH: &str = "bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4";
+const FILE_HASH: &str = "bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4";
 
 #[tokio::test]
-async fn transfer_one_file() -> Result<()> {
+async fn cli_transfer_one_file() -> Result<()> {
     let dir = testdir!();
     let out = dir.join("out");
 
-    let opts = TransferOptions {
-    addr: "127.0.0.1:43333",
-    path: PathBuf::from("transfer/hello_world"),
-    key: KEY_PATH,
-    token: TOKEN,
-    peer_id: PEER_ID,
-    hash: "bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4",
-    out: &out,
-    expected_get_stderr: "bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4
-[1/3] Connecting ...
-[2/3] Requesting ...
-[3/3] Downloading collection...
-  1 file(s) with total transfer size 13B
-Done in 0 seconds",
-expected_provide_stderr: "Reading [PATH]
-Collection: bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3hmzx4
+    let res = CliTestRunner::new()
+        .path(PathBuf::from("transfer/hello_world"))
+        .port(43333)
+        .out(&out)
+        .hash(FILE_HASH)
+        .run()
+        .await?;
 
-PeerID: oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU
-Auth token: uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0
-All-in-one ticket: IF9tTYpMB9Ce0FVWROYLSIjK1t5H90iROkSrwKy9nZm_IKCtjuLfLcMant5lIr_2kXbNmQ0vpZ9N2_qFNiryPKqVAH8AAAHF0gK7J9kskfFeHKsvdPYUbvBqICHbXgfR8RPFWrMB1gcZfQ
-",
-    };
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_one_file__provide.snap");
+    expect.assert_eq(&res.provider_stderr);
 
-    transfer_cmd(opts).await
-    // TODO: test output file is == to input file
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_one_file__get.snap");
+    expect.assert_eq(&res.getter_stderr);
+    compare_files(res.input_path.unwrap(), out)?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn transfer_folder() -> Result<()> {
+async fn cli_transfer_folder() -> Result<()> {
     let dir = testdir!();
     let out = dir.join("out");
 
-    let opts = TransferOptions {
-    addr: "127.0.0.1:43334",
-    path: "transfer".parse()?, 
-    key: KEY_PATH,
-    token: TOKEN,
-    peer_id: PEER_ID,
-    hash: "bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4",
-    out: &out,
-    expected_get_stderr: "bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4
-[1/3] Connecting ...
-[2/3] Requesting ...
-[3/3] Downloading collection...
-  2 file(s) with total transfer size 25B
-Done in 0 seconds",
-expected_provide_stderr: "Reading [PATH]
-Collection: bafkr4iahpa5b75ondci6tkri7ny4pxrfdmqaeycg5uu5kelizoekjn3or4
+    let res = CliTestRunner::new()
+        .port(43334)
+        .path(PathBuf::from("transfer"))
+        .out(&out)
+        .hash(FOLDER_HASH)
+        .run()
+        .await?;
 
-PeerID: oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU
-Auth token: uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0
-All-in-one ticket: IAd4Oh_1zRiR6aoo-3HH3iUbIAJgRu0p1RFoy4ikt26PIKCtjuLfLcMant5lIr_2kXbNmQ0vpZ9N2_qFNiryPKqVAH8AAAHG0gK7J9kskfFeHKsvdPYUbvBqICHbXgfR8RPFWrMB1gcZfQ
-",
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_folder__provide.snap");
+    expect.assert_eq(&res.provider_stderr);
+
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_folder__get.snap");
+    expect.assert_eq(&res.getter_stderr);
+    compare_files(res.input_path.unwrap(), out)
+}
+
+#[tokio::test]
+async fn cli_transfer_from_stdin() -> Result<()> {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+    let path = src.join("transfer/hello_world");
+    let f = std::fs::File::open(&path)?;
+    let stdin = Stdio::from(f);
+    let mut cmd = Command::cargo_bin("sendme")?;
+    cmd.stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stdin(stdin)
+        .arg("provide")
+        .arg("--key")
+        .arg(src.join(KEY_PATH))
+        .arg("--auth-token")
+        .arg(TOKEN)
+        .arg("--addr")
+        .arg("127.0.0.1:43335");
+
+    // b/c we are using stdin, the hash of the file will change every time, since we currently save
+    // the content of stdin to a tempfile
+    // since there is no way to neatly extract the collection hash, let's just test that we are
+    // able to get the content from stdin without error
+
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+
+    let mut stderr = {
+        let mut provide_process = ProvideProcess {
+            child: cmd.spawn()?,
+        };
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        provide_process.child.stderr.take().unwrap()
     };
 
-    transfer_cmd(opts).await
-    // TODO: test output files have correct content
+    let mut got = String::new();
+    stderr.read_to_string(&mut got)?;
+    redact_collection_and_ticket(&mut got);
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_from_stdin__provide.snap");
+    expect.assert_eq(&got);
+    Ok(())
 }
 
-#[test]
-#[ignore]
-fn transfer_from_stdin() -> Result<()> {
-    todo!();
+#[tokio::test]
+async fn cli_transfer_to_stdout() -> Result<()> {
+    let res = CliTestRunner::new()
+        .port(43336)
+        .path(PathBuf::from("transfer/hello_world"))
+        .hash(FILE_HASH)
+        .run()
+        .await?;
+
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_to_stdout__provide.snap");
+    expect.assert_eq(&res.provider_stderr);
+
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_to_stdout__get.snap");
+    expect.assert_eq(&res.getter_stderr);
+
+    let expect_content = tokio::fs::read_to_string(res.input_path.unwrap()).await?;
+    assert_eq!(expect_content, res.getter_stdout);
+    Ok(())
 }
 
-#[test]
-#[ignore]
-fn transfer_to_stdout() -> Result<()> {
-    todo!();
-}
+#[tokio::test]
+async fn cli_transfer_folder_to_stdout() -> Result<()> {
+    let res = CliTestRunner::new()
+        .port(43337)
+        .path(PathBuf::from("transfer"))
+        .hash(FOLDER_HASH)
+        .run()
+        .await?;
 
-struct TransferOptions<'a> {
-    // TODO: figure out a method for knowing the randomly assigned port
-    // Maybe output the addr to the provider's stderr & parsing the output to get the address?
-    addr: &'a str,
-    // `path` is appended to `sendme/tests/fixtures`
-    path: PathBuf,
-    key: &'a str,
-    token: &'a str,
-    peer_id: &'a str,
-    hash: &'a str,
-    out: &'a Path,
-    expected_get_stderr: &'a str,
-    expected_provide_stderr: &'a str,
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+    let expect =
+        expect_test::expect_file!("./snapshots/cli__transfer_folder_to_stdout__provide.snap");
+    expect.assert_eq(&res.provider_stderr);
+
+    let expect = expect_test::expect_file!("./snapshots/cli__transfer_folder_to_stdout__get.snap");
+    expect.assert_eq(&res.getter_stderr);
+
+    let input_path = res.input_path.unwrap();
+    let mut expect_content = tokio::fs::read_to_string(input_path.join("hello_world")).await?;
+    expect_content.push_str(&tokio::fs::read_to_string(input_path.join("foo")).await?);
+    assert_eq!(expect_content, res.getter_stdout);
+    Ok(())
 }
 
 struct ProvideProcess {
@@ -112,64 +157,25 @@ impl Drop for ProvideProcess {
     }
 }
 
-async fn transfer_cmd(opts: TransferOptions<'_>) -> Result<()> {
-    let mut cmd = Command::cargo_bin("sendme")?;
+fn redact_provide_path(s: &mut String) {
+    let start = 8;
+    let end = s.find('\n').unwrap();
+    s.replace_range(start..end, "[PATH]");
+}
 
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures");
-    let path = src.join(opts.path);
+fn redact_get_time(s: &mut String) {
+    let start = s.find("Done in").unwrap() + 8;
+    let end = s.rfind('\n').unwrap();
+    s.replace_range(start..end, "[TIME]");
+}
 
-    cmd.stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .arg("provide")
-        .arg(&path)
-        .arg("--key")
-        .arg(src.join(opts.key))
-        .arg("--auth-token")
-        .arg(opts.token)
-        .arg("--addr")
-        .arg(opts.addr);
-
-    let (get_assert, mut output_reader) = {
-        let mut provide_process = ProvideProcess {
-            child: cmd.spawn()?,
-        };
-
-        let mut cmd = Command::cargo_bin("sendme")?;
-        cmd.arg("get")
-            .arg(opts.hash)
-            .arg("--peer")
-            .arg(opts.peer_id)
-            .arg("--auth-token")
-            .arg(opts.token)
-            .arg("--addr")
-            .arg(opts.addr)
-            .arg("--out")
-            .arg(opts.out);
-
-        let get_assert = cmd.assert();
-
-        // the the output before we drop the `provide_process`
-        let output_reader = provide_process.child.stderr.take().unwrap();
-        (get_assert, output_reader)
-    };
-
-    let mut output = String::new();
-    output_reader.read_to_string(&mut output)?;
-
-    // this is convoluted, but I can't use the same `assert` pattern that I did in the `get`
-    // command, since we need the `provider` to be a longer running process
-    // I can use a predicate to see if the output "ends_with" the `opts.expected_provide_stderr`
-    // but then we don't get nice output to display what is different between the two strs
-    let redact_path = tokio::fs::canonicalize(&path).await?;
-    let output = output.replace(redact_path.to_str().unwrap(), "[PATH]");
-    assert_eq!(output, opts.expected_provide_stderr);
-    get_assert
-        .success()
-        .stderr(predicate::str::contains(opts.expected_get_stderr));
-    compare_files(path, opts.out)?;
-    Ok(())
+fn redact_collection_and_ticket(s: &mut String) {
+    let start = s.find("Collection").unwrap() + 11;
+    let end = s.find('\n').unwrap();
+    s.replace_range(start..end, "[HASH]");
+    let start = s.find("All-in-one").unwrap() + 19;
+    let end = s.rfind('\n').unwrap();
+    s.replace_range(start..end, "[TICKET]");
 }
 
 fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) -> Result<()> {
@@ -192,4 +198,135 @@ fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) 
     }
 
     Ok(())
+}
+
+struct CliTestRunner {
+    port: u16,
+    path: PathBuf,
+    out: Option<PathBuf>,
+    hash: Option<String>,
+}
+
+struct CliTestResults {
+    provider_stderr: String,
+    provider_stdout: String,
+    getter_stderr: String,
+    getter_stdout: String,
+    input_path: Option<PathBuf>,
+}
+
+impl CliTestResults {
+    fn empty() -> Self {
+        Self {
+            provider_stdout: "".to_string(),
+            provider_stderr: "".to_string(),
+            getter_stdout: "".to_string(),
+            getter_stderr: "".to_string(),
+            input_path: None,
+        }
+    }
+}
+
+impl CliTestRunner {
+    fn new() -> Self {
+        Self {
+            port: 40000_u16,
+            path: "transfer".parse().unwrap(),
+            out: None,
+            hash: None,
+        }
+    }
+
+    fn port(mut self, p: u16) -> Self {
+        self.port = p;
+        self
+    }
+
+    fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.path = path.as_ref().to_path_buf();
+        self
+    }
+
+    fn out(mut self, out: impl AsRef<Path>) -> Self {
+        self.out = Some(out.as_ref().to_path_buf());
+        self
+    }
+
+    fn hash<I: Into<String>>(mut self, hash: I) -> Self {
+        self.hash = Some(hash.into());
+        self
+    }
+
+    async fn run(self) -> Result<CliTestResults> {
+        let hash = self
+            .hash
+            .expect("Must provider a collection hash to the test runner");
+
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+
+        let path = src.join(&self.path);
+
+        let addr = format!("127.0.0.1:{}", self.port);
+
+        let mut cmd = Command::cargo_bin("sendme")?;
+        cmd.stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .arg("provide")
+            .arg(&path)
+            .arg("--key")
+            .arg(src.join(KEY_PATH))
+            .arg("--auth-token")
+            .arg(TOKEN)
+            .arg("--addr")
+            .arg(&addr);
+
+        let (get_output, mut stderr, mut stdout) = {
+            // to ensure we drop the child process, do provide work in its own
+            // closure
+            // if we don't drop the child process the provider's stderr & stdout readers will never
+            // close, and will never EOF
+            let mut provide_process = ProvideProcess {
+                child: cmd.spawn()?,
+            };
+
+            let mut cmd = Command::cargo_bin("sendme")?;
+            cmd.arg("get")
+                .arg(hash)
+                .arg("--peer")
+                .arg(PEER_ID)
+                .arg("--auth-token")
+                .arg(TOKEN)
+                .arg("--addr")
+                .arg(addr);
+            let cmd = if let Some(out) = self.out {
+                cmd.arg("--out").arg(out)
+            } else {
+                &mut cmd
+            };
+
+            let get_output = cmd.output()?;
+
+            let stderr = provide_process.child.stderr.take().unwrap();
+            let stdout = provide_process.child.stdout.take().unwrap();
+            (get_output, stderr, stdout)
+        };
+
+        let mut res = CliTestResults::empty();
+        stderr.read_to_string(&mut res.provider_stderr)?;
+        stdout.read_to_string(&mut res.provider_stdout)?;
+
+        res.getter_stderr = String::from_utf8_lossy(&get_output.stderr).to_string();
+        res.getter_stdout = String::from_utf8_lossy(&get_output.stdout).to_string();
+
+        res.input_path = Some(path);
+
+        // redactions
+        // remove path
+
+        redact_provide_path(&mut res.provider_stderr);
+        redact_get_time(&mut res.getter_stderr);
+        Ok(res)
+    }
 }
