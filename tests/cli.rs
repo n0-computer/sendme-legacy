@@ -4,7 +4,7 @@ use std::process::{Child, Command, Stdio};
 
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
-use testdir::testdir;
+use tempfile::tempdir;
 
 const KEY_PATH: &str = "key";
 const TOKEN: &str = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
@@ -14,8 +14,8 @@ const FILE_HASH: &str = "bafkr4ic7nvgyutah2cpnavkwittawseizlln4r7xjciturflycwl3h
 
 #[tokio::test]
 async fn cli_transfer_one_file() -> Result<()> {
-    let dir = testdir!();
-    let out = dir.join("out");
+    let dir = tempdir()?;
+    let out = dir.path().join("out");
 
     let res = CliTestRunner::new()
         .path(PathBuf::from("transfer/hello_world"))
@@ -37,8 +37,8 @@ async fn cli_transfer_one_file() -> Result<()> {
 
 #[tokio::test]
 async fn cli_transfer_folder() -> Result<()> {
-    let dir = testdir!();
-    let out = dir.join("out");
+    let dir = tempdir()?;
+    let out = dir.path().join("out");
 
     let res = CliTestRunner::new()
         .port(43334)
