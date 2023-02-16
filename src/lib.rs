@@ -336,7 +336,6 @@ mod tests {
         .await
         .unwrap();
 
-        println!("wait for supervisor");
         // Unwrap the JoinHandle, then the result of the Provider
         tokio::time::timeout(Duration::from_secs(10), supervisor)
             .await

@@ -418,7 +418,6 @@ async fn handle_stream(
                         break;
                     }
                 }
-                debug!("all blobs written");
                 writer.finish().await?;
                 let _ = events.send(Event::TransferCompleted {
                     connection_id,
