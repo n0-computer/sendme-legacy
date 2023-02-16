@@ -229,6 +229,12 @@ where
                     }
                 }
 
+                let chunk = reader.read_chunk(8, false).await?;
+                ensure!(
+                    chunk.is_none(),
+                    "received unexpected data from the provider: {:?}",
+                    chunk
+                );
                 // Shut down the stream
                 drop(reader);
 
