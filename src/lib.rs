@@ -270,19 +270,18 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_server_close() {
+    fn setup_logging() {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
             .with(EnvFilter::from_default_env())
-            .init();
-
-        for _ in 0..100 {
-            inner_test().await;
-        }
+            .try_init()
+            .ok();
     }
-    async fn inner_test() {
+
+    #[tokio::test]
+    async fn test_server_close() {
         // Prepare a Provider transferring a file.
+        setup_logging();
         let dir = testdir!();
         let src = dir.join("src");
         fs::write(&src, "hello there").await.unwrap();
@@ -299,7 +298,6 @@ mod tests {
         let supervisor = tokio::spawn(async move {
             let mut events = provider.subscribe();
             loop {
-                println!("supervisor: loop");
                 tokio::select! {
                     biased;
                     res = &mut provider => break res.context("provider failed"),
@@ -321,7 +319,6 @@ mod tests {
             }
         });
 
-        println!("get");
         get::run(
             hash,
             auth_token,
@@ -332,9 +329,7 @@ mod tests {
             || async move { Ok(()) },
             |_collection| async move { Ok(()) },
             |_hash, mut stream, _name| async move {
-                println!("copying");
                 io::copy(&mut stream, &mut io::sink()).await?;
-                println!("copy done");
                 Ok(stream)
             },
         )
@@ -343,7 +338,11 @@ mod tests {
 
         println!("wait for supervisor");
         // Unwrap the JoinHandle, then the result of the Provider
-        supervisor.await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(10), supervisor)
+            .await
+            .expect("supervisor timeout")
+            .expect("supervisor failed")
+            .expect("supervisor error");
     }
 
     #[tokio::test]
