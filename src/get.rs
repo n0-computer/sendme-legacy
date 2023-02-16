@@ -20,7 +20,7 @@ use bytes::BytesMut;
 use futures::Future;
 use postcard::experimental::max_size::MaxSize;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
-use tracing::debug;
+use tracing::{debug, error};
 
 pub use crate::util::Hash;
 
@@ -229,13 +229,11 @@ where
                     }
                 }
 
-                let chunk = reader.read_chunk(8, false).await?;
-                ensure!(
-                    chunk.is_none(),
-                    "received unexpected data from the provider: {:?}",
-                    chunk
-                );
                 // Shut down the stream
+                if let Some(chunk) = reader.read_chunk(8, false).await? {
+                    reader.stop(0u8.into()).ok();
+                    error!("Received unexpected data from the provider: {chunk:?}");
+                }
                 drop(reader);
 
                 let elapsed = now.elapsed();
