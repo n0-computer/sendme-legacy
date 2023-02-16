@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use testdir::testdir;
 
@@ -157,16 +157,18 @@ impl Drop for ProvideProcess {
     }
 }
 
-fn redact_provide_path(s: &mut String) {
-    let start = 8;
-    let end = s.find('\n').unwrap();
-    s.replace_range(start..end, "[PATH]");
+fn redact_provide_path(path: PathBuf, s: String) -> String {
+    s.replace(path.to_str().unwrap(), "[PATH]")
 }
 
-fn redact_get_time(s: &mut String) {
-    let start = s.find("Done in").unwrap() + 8;
-    let end = s.rfind('\n').unwrap();
+fn redact_get_time(s: &mut String) -> Result<()> {
+    let start = s
+        .find("Done in")
+        .context("Missing expected text 'Done in' in get output")?
+        + 8;
+    let end = s.rfind('\n').context("Missing expected line return in ")?;
     s.replace_range(start..end, "[TIME]");
+    Ok(())
 }
 
 fn redact_collection_and_ticket(s: &mut String) {
@@ -320,13 +322,13 @@ impl CliTestRunner {
         res.getter_stderr = String::from_utf8_lossy(&get_output.stderr).to_string();
         res.getter_stdout = String::from_utf8_lossy(&get_output.stdout).to_string();
 
-        res.input_path = Some(path);
-
         // redactions
-        // remove path
+        let redact_path = tokio::fs::canonicalize(&path).await?;
 
-        redact_provide_path(&mut res.provider_stderr);
-        redact_get_time(&mut res.getter_stderr);
+        res.provider_stderr = redact_provide_path(redact_path, res.provider_stderr);
+        redact_get_time(&mut res.getter_stderr)?;
+
+        res.input_path = Some(path);
         Ok(res)
     }
 }
