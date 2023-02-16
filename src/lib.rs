@@ -302,7 +302,7 @@ mod tests {
                     biased;
                     res = &mut provider => break res.context("provider failed"),
                     maybe_event = events.recv() => {
-                        match dbg!(maybe_event) {
+                        match maybe_event {
                             Ok(event) => {
                                 match event {
                                     Event::TransferCompleted { .. } => provider.shutdown(),
