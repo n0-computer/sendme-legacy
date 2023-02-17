@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "linux"))]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
