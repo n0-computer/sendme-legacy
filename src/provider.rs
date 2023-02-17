@@ -339,7 +339,9 @@ async fn handle_connection(
     .await
 }
 
-/// Read and decode the handshake. Will fail if there is an error while reading, there is a token
+/// Read and decode the handshake.
+///
+/// Will fail if there is an error while reading, there is a token
 /// mismatch, or no valid handshake was received.
 ///
 /// When successful, the reader is still useable after this function and the buffer will be drained of any handshake
@@ -364,7 +366,9 @@ async fn read_handshake<R: AsyncRead + Unpin>(
     Ok(())
 }
 
-/// Read the request from the getter. Will fail if there is an error while reading, if the reader
+/// Read the request from the getter.
+///
+/// Will fail if there is an error while reading, if the reader
 /// contains more data than the Request, or if no valid request is sent.
 ///
 /// When successful, the buffer is empty after this function call.
@@ -381,8 +385,12 @@ async fn read_request(mut reader: quinn::RecvStream, buffer: &mut BytesMut) -> R
     }
 }
 
-/// Transfers the collection data & outboard encoding and then the individual blob data & outboard
-/// encoding, sequentially. Will fail if there is an error writing to the getter or reading from
+/// Transfers the collection & blob data.
+///
+/// First, it transfers the collection data & its associated outboard encoding data. Then it sequentially transfers each individual blob data & its associated outboard
+/// encoding data.
+///
+/// Will fail if there is an error writing to the getter or reading from
 /// the database.
 ///
 /// If a blob from the collection cannot be found in the database, the transfer will gracefully
