@@ -18,7 +18,7 @@ async fn cli_transfer_one_file() -> Result<()> {
     let out = dir.path().join("out");
 
     let res = CliTestRunner::new()
-        .path(PathBuf::from("transfer/foo.bin"))
+        .path(PathBuf::from("transfer").join("foo.bin"))
         .port(43333)
         .out(&out)
         .hash(FILE_HASH)
@@ -65,7 +65,7 @@ async fn cli_transfer_from_stdin() -> Result<()> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures");
-    let path = src.join("transfer/foo.bin");
+    let path = src.join("transfer").join("foo.bin");
     let f = std::fs::File::open(&path)?;
     let stdin = Stdio::from(f);
     let mut cmd = Command::cargo_bin("sendme")?;
@@ -109,7 +109,7 @@ async fn cli_transfer_from_stdin() -> Result<()> {
 async fn cli_transfer_to_stdout() -> Result<()> {
     let res = CliTestRunner::new()
         .port(43336)
-        .path(PathBuf::from("transfer/foo.bin"))
+        .path(PathBuf::from("transfer").join("foo.bin"))
         .hash(FILE_HASH)
         .run()
         .await?;
