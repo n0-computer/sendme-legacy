@@ -39,7 +39,7 @@ async fn cli_transfer_one_file() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cli_transfer_folder() -> Result<()> {
+async fn cli_transfer_folder_to_outpath() -> Result<()> {
     let dir = tempdir()?;
     let out = dir.path().join("out");
 
@@ -163,8 +163,9 @@ impl Drop for ProvideProcess {
     }
 }
 
-fn redact_provide_path(path: PathBuf, s: String) -> String {
-    s.replace(path.to_str().unwrap(), "[PATH]")
+fn redact_provide_path(path: &Path, s: String) -> String {
+    let path = path.to_string_lossy();
+    s.replace(&*path, "[PATH]")
 }
 
 fn redact_get_time(s: &mut String) -> Result<()> {
@@ -334,6 +335,7 @@ impl CliTestRunner {
         // new hash you should be expecting
         // run the test with cargo test TEST_NAME -- --nocapture
         println!("{}", res.provider_stderr);
+        println!("{}", res.provider_stdout);
 
         stdout.read_to_string(&mut res.provider_stdout)?;
 
@@ -341,9 +343,9 @@ impl CliTestRunner {
         res.getter_stdout = get_output.stdout;
 
         // redactions
-        let redact_path = tokio::fs::canonicalize(&path).await?;
+        // let redact_path = tokio::fs::canonicalize(&path).await?;
 
-        res.provider_stderr = redact_provide_path(redact_path, res.provider_stderr);
+        res.provider_stderr = redact_provide_path(&path, res.provider_stderr);
         redact_get_time(&mut res.getter_stderr)?;
 
         res.input_path = Some(path);
