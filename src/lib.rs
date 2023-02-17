@@ -115,6 +115,7 @@ mod tests {
             let opts = get::Options {
                 addr,
                 peer_id: Some(peer_id),
+                keylog: true,
             };
             let content = &content;
             let name = &name;
@@ -224,6 +225,7 @@ mod tests {
         let opts = get::Options {
             addr: provider.listen_addr(),
             peer_id: Some(provider.peer_id()),
+            keylog: true,
         };
 
         let i = AtomicUsize::new(0);
@@ -325,6 +327,7 @@ mod tests {
             get::Options {
                 addr: provider_addr,
                 peer_id: None,
+                keylog: true,
             },
             || async move { Ok(()) },
             |_collection| async move { Ok(()) },
@@ -373,6 +376,7 @@ mod tests {
                 get::Options {
                     addr: provider_addr,
                     peer_id: None,
+                    keylog: true,
                 },
                 || async move { Ok(()) },
                 |_collection| async move { Ok(()) },
