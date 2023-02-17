@@ -1,10 +1,11 @@
-#![cfg(any(target_os = "windows", target_os = "macos"))]
+// #![cfg(any(target_os = "windows", target_os = "macos"))]
+use std::env;
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use anyhow::Result;
-use assert_cmd::prelude::*;
+use anyhow::{bail, Result};
 use tempfile::tempdir;
 
 const KEY_PATH: &str = "key";
@@ -13,8 +14,8 @@ const PEER_ID: &str = "oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU";
 const FOLDER_HASH: &str = "bafkr4idyzqc7g2wggwyo6dos7z3qwi2keus46kmk3ljh2hg5ezpnd7jnqy";
 const FILE_HASH: &str = "bafkr4ict7dy3iohmc4xpupfxnoogwcfgily7vukhxuwooje6ph7h775wtq";
 
-#[tokio::test]
-async fn cli_transfer_one_file() -> Result<()> {
+#[test]
+fn cli_transfer_one_file() -> Result<()> {
     let dir = tempdir()?;
     let out = dir.path().join("out");
 
@@ -23,8 +24,7 @@ async fn cli_transfer_one_file() -> Result<()> {
         .port(43333)
         .out(&out)
         .hash(FILE_HASH)
-        .run()
-        .await?;
+        .run()?;
 
     // run test w/ `UPDATE_EXPECT=1` to update snapshot files
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_one_file__provide.snap");
@@ -36,8 +36,8 @@ async fn cli_transfer_one_file() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn cli_transfer_folder() -> Result<()> {
+#[test]
+fn cli_transfer_folder() -> Result<()> {
     let dir = tempdir()?;
     let out = dir.path().join("out");
 
@@ -46,8 +46,7 @@ async fn cli_transfer_folder() -> Result<()> {
         .path(PathBuf::from("transfer"))
         .out(&out)
         .hash(FOLDER_HASH)
-        .run()
-        .await?;
+        .run()?;
 
     // run test w/ `UPDATE_EXPECT=1` to update snapshot files
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_folder__provide.snap");
@@ -58,15 +57,16 @@ async fn cli_transfer_folder() -> Result<()> {
     compare_files(res.input_path.unwrap(), out)
 }
 
-#[tokio::test]
-async fn cli_transfer_from_stdin() -> Result<()> {
+#[test]
+fn cli_transfer_from_stdin() -> Result<()> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures");
     let path = src.join("transfer").join("foo.bin");
-    let f = std::fs::File::open(&path)?;
+    let f = File::open(path)?;
     let stdin = Stdio::from(f);
-    let mut cmd = Command::cargo_bin("sendme")?;
+
+    let mut cmd = cargo_bin("sendme")?;
     cmd.stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .stdin(stdin)
@@ -87,7 +87,7 @@ async fn cli_transfer_from_stdin() -> Result<()> {
             child: cmd.spawn()?,
         };
 
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        std::thread::sleep(std::time::Duration::from_secs(1));
 
         provide_process.child.stderr.take().unwrap()
     };
@@ -104,14 +104,13 @@ async fn cli_transfer_from_stdin() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn cli_transfer_to_stdout() -> Result<()> {
+#[test]
+fn cli_transfer_to_stdout() -> Result<()> {
     let res = CliTestRunner::new()
         .port(43336)
         .path(PathBuf::from("transfer").join("foo.bin"))
         .hash(FILE_HASH)
-        .run()
-        .await?;
+        .run()?;
 
     // run test w/ `UPDATE_EXPECT=1` to update snapshot files
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_to_stdout__provide.snap");
@@ -120,7 +119,7 @@ async fn cli_transfer_to_stdout() -> Result<()> {
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_to_stdout__get.snap");
     expect.assert_eq(&res.getter_stderr);
 
-    let expect_content = tokio::fs::read(res.input_path.unwrap()).await?;
+    let expect_content = std::fs::read(res.input_path.unwrap())?;
     assert_eq!(expect_content, res.getter_stdout);
     Ok(())
 }
@@ -235,7 +234,7 @@ impl CliTestRunner {
         self
     }
 
-    async fn run(self) -> Result<CliTestResults> {
+    fn run(self) -> Result<CliTestResults> {
         let hash = self
             .hash
             .expect("Must provider a collection hash to the test runner");
@@ -248,7 +247,7 @@ impl CliTestRunner {
 
         let addr = format!("127.0.0.1:{}", self.port);
 
-        let mut cmd = Command::cargo_bin("sendme")?;
+        let mut cmd = cargo_bin("sendme")?;
         cmd.stderr(Stdio::piped())
             .stdout(Stdio::piped())
             .arg("provide")
@@ -269,7 +268,7 @@ impl CliTestRunner {
                 child: cmd.spawn()?,
             };
 
-            let mut cmd = Command::cargo_bin("sendme")?;
+            let mut cmd = cargo_bin("sendme")?;
             cmd.arg("get")
                 .arg(hash)
                 .arg("--peer")
@@ -312,4 +311,36 @@ impl CliTestRunner {
         res.input_path = Some(path);
         Ok(res)
     }
+}
+
+// The follow are taken from https://github.com/assert-rs/assert_cmd/blob/a7e9d5234f51cbccfb260e0b7789a307fa3d416b/src/cargo.rs#L183-L208
+// in the `assert_cmd` crate.
+fn target_dir() -> PathBuf {
+    env::current_exe()
+        .ok()
+        .map(|mut path| {
+            path.pop();
+            if path.ends_with("deps") {
+                path.pop();
+            }
+            path
+        })
+        .unwrap()
+}
+
+/// Look up the path to a cargo-built binary within an integration test.
+pub fn cargo_bin<S: AsRef<str>>(name: S) -> Result<Command> {
+    let path = cargo_bin_str(name.as_ref());
+    if path.is_file() {
+        Ok(Command::new(path))
+    } else {
+        bail!(format!("bin {path:?} not found"))
+    }
+}
+
+fn cargo_bin_str(name: &str) -> PathBuf {
+    let env_var = format!("CARGO_BIN_EXE_{name}");
+    std::env::var_os(env_var)
+        .map(|p| p.into())
+        .unwrap_or_else(|| target_dir().join(format!("{}{}", name, env::consts::EXE_SUFFIX)))
 }
