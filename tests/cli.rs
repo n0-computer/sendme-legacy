@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use assert_cmd::prelude::*;
 use tempfile::tempdir;
 
@@ -99,7 +99,7 @@ async fn cli_transfer_from_stdin() -> Result<()> {
 
     let mut got = String::new();
     stderr.read_to_string(&mut got)?;
-    redact_collection_and_ticket(&mut got);
+    let got = redact_collection_and_ticket(&mut got)?;
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_from_stdin__provide.snap");
     expect.assert_eq(&got);
     Ok(())
@@ -168,23 +168,17 @@ fn redact_provide_path(path: &Path, s: String) -> String {
     s.replace(&*path, "[PATH]")
 }
 
-fn redact_get_time(s: &mut String) -> Result<()> {
-    let start = s
-        .find("Done in")
-        .context("Missing expected text 'Done in' in get output")?
-        + 8;
-    let end = s.rfind('\n').context("Missing expected line return in ")?;
-    s.replace_range(start..end, "[TIME]");
-    Ok(())
+fn redact_get_time(s: &mut str) -> Result<String> {
+    let re = regex::Regex::new(r"Done in \d\s\w*")?;
+    let s = re.replace(s, "Done in [TIME]");
+    Ok(s.to_string())
 }
 
-fn redact_collection_and_ticket(s: &mut String) {
-    let start = s.find("Collection").unwrap() + 11;
-    let end = s.find('\n').unwrap();
-    s.replace_range(start..end, "[HASH]");
-    let start = s.find("All-in-one").unwrap() + 19;
-    let end = s.rfind('\n').unwrap();
-    s.replace_range(start..end, "[TICKET]");
+fn redact_collection_and_ticket(s: &mut str) -> Result<String> {
+    let re = regex::Regex::new(r"Collection: \S*")?;
+    let s = re.replace(s, "Collection: [HASH]").to_string();
+    let re = regex::Regex::new(r"All-in-one ticket: \S*")?;
+    Ok(re.replace(&s, "All-in-one ticket: [TICKET]").to_string())
 }
 
 fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) -> Result<()> {
@@ -343,10 +337,9 @@ impl CliTestRunner {
         res.getter_stdout = get_output.stdout;
 
         // redactions
-        // let redact_path = tokio::fs::canonicalize(&path).await?;
 
         res.provider_stderr = redact_provide_path(&path, res.provider_stderr);
-        redact_get_time(&mut res.getter_stderr)?;
+        res.getter_stderr = redact_get_time(&mut res.getter_stderr)?;
 
         res.input_path = Some(path);
         Ok(res)
