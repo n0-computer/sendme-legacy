@@ -78,12 +78,9 @@ async fn cli_transfer_from_stdin() -> Result<()> {
         .arg("--addr")
         .arg("127.0.0.1:43335");
 
-    // b/c we are using stdin, the hash of the file will change every time, since we currently save
-    // the content of stdin to a tempfile
-    // since there is no way to neatly extract the collection hash, let's just test that we are
-    // able to get the content from stdin without error
-
-    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
+    // Because of the way we handle providing data from stdin, the hash of the file will change every time.
+    // Since there is no way to neatly extract the collection hash and then pass it to the getter
+    // process, let's just test the provider side in this case
 
     let mut stderr = {
         let mut provide_process = ProvideProcess {
@@ -97,7 +94,11 @@ async fn cli_transfer_from_stdin() -> Result<()> {
 
     let mut got = String::new();
     stderr.read_to_string(&mut got)?;
+
+    // Redact the collection & ticket hashes, since they change on each run.
     let got = redact_collection_and_ticket(&mut got)?;
+
+    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_from_stdin__provide.snap");
     expect.assert_eq(&got);
     Ok(())
@@ -153,9 +154,6 @@ fn redact_collection_and_ticket(s: &mut str) -> Result<String> {
 }
 
 fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) -> Result<()> {
-    // if dir, get filename,  come up with paths for expect and got
-    // call compare_files() on each
-    // if file, open files & assert_eq
     let expect_path = expect_path.as_ref();
     let got_dir_path = got_dir_path.as_ref();
     if expect_path.is_dir() {
