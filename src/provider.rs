@@ -232,8 +232,9 @@ pub enum Event {
     TransferAborted {
         /// The quic connection id.
         connection_id: u64,
-        /// The request id.
-        request_id: u64,
+        /// The request id. When `None`, the transfer was aborted before or during reading and decoding
+        /// the transfer request.
+        request_id: Option<u64>,
     },
 }
 
@@ -338,7 +339,12 @@ async fn handle_connection(
     .await
 }
 
-async fn handshake<R: AsyncRead + Unpin>(
+/// Read and decode the handshake. Will fail if there is an error while reading, there is a token
+/// mismatch, or no valid handshake was received.
+///
+/// When successful, the reader is still useable after this function and the buffer will be drained of any handshake
+/// data.
+async fn read_handshake<R: AsyncRead + Unpin>(
     mut reader: R,
     buffer: &mut BytesMut,
     token: AuthToken,
@@ -358,7 +364,11 @@ async fn handshake<R: AsyncRead + Unpin>(
     Ok(())
 }
 
-async fn decode_request(mut reader: quinn::RecvStream, buffer: &mut BytesMut) -> Result<Request> {
+/// Read the request from the getter. Will fail if there is an error while reading, if the reader
+/// contains more data than the Request, or if no valid request is sent.
+///
+/// When successful, the buffer is empty after this function call.
+async fn read_request(mut reader: quinn::RecvStream, buffer: &mut BytesMut) -> Result<Request> {
     let request = read_lp::<_, Request>(&mut reader, buffer).await?;
     ensure!(
         reader.read_chunk(8, false).await?.is_none(),
@@ -371,14 +381,28 @@ async fn decode_request(mut reader: quinn::RecvStream, buffer: &mut BytesMut) ->
     }
 }
 
+/// Transfers the collection data & outboard encoding and then the individual blob data & outboard
+/// encoding, sequentially. Will fail if there is an error writing to the getter or reading from
+/// the database.
+///
+/// If a blob from the collection cannot be found in the database, the transfer will gracefully
+/// close the writer, and return with `Ok(SentStatus::NotFound)`.
+///
+/// If the transfer does _not_ end in error, the buffer will be empty and the writer is gracefully closed.
 async fn transfer_collection(
-    db: Database,
+    // Database from which to fetch blobs.
+    db: &Database,
+    // Quinn stream.
     mut writer: quinn::SendStream,
+    // Buffer used when writing to writer.
     buffer: &mut BytesMut,
+    // The id of the transfer request.
     request_id: u64,
+    // The bao outboard encoded data.
     outboard: &Bytes,
+    // The actual blob data.
     data: &Bytes,
-) -> Result<()> {
+) -> Result<SentStatus> {
     // We only respond to requests for collections, not individual blobs
     let mut extractor = SliceExtractor::new_outboard(
         std::io::Cursor::new(&data[..]),
@@ -414,16 +438,20 @@ async fn transfer_collection(
             send_blob(db.clone(), blob.hash, writer, buffer, request_id).await?;
         writer = writer1;
         if SentStatus::NotFound == status {
-            break;
+            writer.finish().await?;
+            return Ok(status);
         }
     }
 
     writer.finish().await?;
-    debug!("finished response");
-    Ok(())
+    Ok(SentStatus::Sent)
 }
 
-fn notify_transfer_aborted(events: broadcast::Sender<Event>, connection_id: u64, request_id: u64) {
+fn notify_transfer_aborted(
+    events: broadcast::Sender<Event>,
+    connection_id: u64,
+    request_id: Option<u64>,
+) {
     let _ = events.send(Event::TransferAborted {
         connection_id,
         request_id,
@@ -442,17 +470,17 @@ async fn handle_stream(
 
     // 1. Read Handshake
     debug!("reading handshake");
-    if let Err(e) = handshake(&mut reader, &mut in_buffer, token).await {
-        notify_transfer_aborted(events, connection_id, 0);
+    if let Err(e) = read_handshake(&mut reader, &mut in_buffer, token).await {
+        notify_transfer_aborted(events, connection_id, None);
         return Err(e);
     }
 
     // 2. Decode the request.
     debug!("reading request");
-    let request = match decode_request(reader, &mut in_buffer).await {
+    let request = match read_request(reader, &mut in_buffer).await {
         Ok(r) => r,
         Err(e) => {
-            notify_transfer_aborted(events, connection_id, 0);
+            notify_transfer_aborted(events, connection_id, None);
             return Err(e);
         }
     };
@@ -471,7 +499,7 @@ async fn handle_stream(
         Some(BlobOrCollection::Collection(d)) => d,
         _ => {
             debug!("not found {}", hash);
-            notify_transfer_aborted(events, connection_id, request.id);
+            notify_transfer_aborted(events, connection_id, Some(request.id));
             write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound).await?;
             writer.finish().await?;
 
@@ -480,24 +508,23 @@ async fn handle_stream(
     };
 
     // 5. Transfer data!
-    if let Err(e) = transfer_collection(
-        db.clone(),
-        writer,
-        &mut out_buffer,
-        request.id,
-        outboard,
-        data,
-    )
-    .await
-    {
-        notify_transfer_aborted(events, connection_id, request.id);
-        return Err(e);
+    match transfer_collection(&db, writer, &mut out_buffer, request.id, outboard, data).await {
+        Ok(SentStatus::Sent) => {
+            let _ = events.send(Event::TransferCompleted {
+                connection_id,
+                request_id: request.id,
+            });
+        }
+        Ok(SentStatus::NotFound) => {
+            notify_transfer_aborted(events, connection_id, Some(request.id));
+        }
+        Err(e) => {
+            notify_transfer_aborted(events, connection_id, Some(request.id));
+            return Err(e);
+        }
     }
 
-    let _ = events.send(Event::TransferCompleted {
-        connection_id,
-        request_id: request.id,
-    });
+    debug!("finished response");
     Ok(())
 }
 
