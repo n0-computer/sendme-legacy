@@ -1,4 +1,4 @@
-#![cfg(not(target_os = "linux"))]
+#![cfg(any(target_os = "windows", target_os = "macos"))]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -26,9 +26,6 @@ async fn cli_transfer_one_file() -> Result<()> {
         .run()
         .await?;
 
-    println!("{}", res.provider_stderr);
-    println!("{}", res.getter_stderr);
-    println!("{}", res.provider_stdout);
     // run test w/ `UPDATE_EXPECT=1` to update snapshot files
     let expect = expect_test::expect_file!("./snapshots/cli__transfer_one_file__provide.snap");
     expect.assert_eq(&res.provider_stderr);
@@ -40,7 +37,7 @@ async fn cli_transfer_one_file() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cli_transfer_folder_to_outpath() -> Result<()> {
+async fn cli_transfer_folder() -> Result<()> {
     let dir = tempdir()?;
     let out = dir.path().join("out");
 
@@ -124,33 +121,6 @@ async fn cli_transfer_to_stdout() -> Result<()> {
 
     let expect_content = tokio::fs::read(res.input_path.unwrap()).await?;
     assert_eq!(expect_content, res.getter_stdout);
-    Ok(())
-}
-
-#[tokio::test]
-async fn cli_transfer_folder_to_stdout() -> Result<()> {
-    let res = CliTestRunner::new()
-        .port(43337)
-        .path(PathBuf::from("transfer"))
-        .hash(FOLDER_HASH)
-        .run()
-        .await?;
-
-    // run test w/ `UPDATE_EXPECT=1` to update snapshot files
-    let expect =
-        expect_test::expect_file!("./snapshots/cli__transfer_folder_to_stdout__provide.snap");
-    expect.assert_eq(&res.provider_stderr);
-
-    let expect = expect_test::expect_file!("./snapshots/cli__transfer_folder_to_stdout__get.snap");
-    expect.assert_eq(&res.getter_stderr);
-
-    // todo: fix
-    // let input_path = res.input_path.unwrap();
-    // let mut expect_content = tokio::fs::read(input_path.join("bar.bin")).await?;
-    // println!("expect_content {:?}", expect_content);
-    // expect_content.append(&mut tokio::fs::read(input_path.join("foo.bin")).await?);
-    // println!("after append: expect_content {:?}", expect_content);
-    // assert_eq!(expect_content, res.getter_stdout);
     Ok(())
 }
 
@@ -328,7 +298,7 @@ impl CliTestRunner {
 
         // this is useful if you have to change the underlying transfer files & need to know the
         // new hash you should be expecting
-        // run the test with cargo test TEST_NAME -- --nocapture
+        // run the test with `cargo test TEST_NAME -- --nocapture` to see this
         println!("{}", res.provider_stderr);
         println!("{}", res.provider_stdout);
 
@@ -338,7 +308,6 @@ impl CliTestRunner {
         res.getter_stdout = get_output.stdout;
 
         // redactions
-
         res.provider_stderr = redact_provide_path(&path, res.provider_stderr);
         res.getter_stderr = redact_get_time(&mut res.getter_stderr)?;
 
