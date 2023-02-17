@@ -612,6 +612,7 @@ pub async fn create_collection(data_sources: Vec<DataSource>) -> Result<(Databas
     // insert outboards into the database and build collection
 
     for (path, name, hash, outboard) in outboards {
+        println!("path: {path:?}\nname\n{name:?}\nhash: {hash}");
         debug_assert!(outboard.len() >= 8, "outboard must at least contain size");
         let size = u64::from_le_bytes(outboard[..8].try_into().unwrap());
         db.insert(
@@ -649,6 +650,7 @@ pub async fn create_collection(data_sources: Vec<DataSource>) -> Result<(Databas
     let data = postcard::to_slice(&c, &mut buffer)?;
     let (outboard, hash) = abao::encode::outboard(&data);
     let hash = Hash::from(hash);
+    println!("collection hash {hash}");
     db.insert(
         hash,
         BlobOrCollection::Collection((Bytes::from(outboard), Bytes::from(data.to_vec()))),
