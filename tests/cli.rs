@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "windows", target_os = "macos"))]
 use std::env;
 use std::fs::File;
 use std::io::Read;
