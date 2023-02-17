@@ -9,7 +9,7 @@ use tempfile::tempdir;
 const KEY_PATH: &str = "key";
 const TOKEN: &str = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
 const PEER_ID: &str = "oK2O4t8twxqe3mUiv_aRds2ZDS-ln03b-oU2KvI8qpU";
-const FOLDER_HASH: &str = "bafkr4ifnslw5aifxazkwlivqwt7rl3nbex6w3atfko3be7h6ss25vj2ipm";
+const FOLDER_HASH: &str = "bafkr4idyzqc7g2wggwyo6dos7z3qwi2keus46kmk3ljh2hg5ezpnd7jnqy";
 const FILE_HASH: &str = "bafkr4ict7dy3iohmc4xpupfxnoogwcfgily7vukhxuwooje6ph7h775wtq";
 
 #[tokio::test]
