@@ -215,6 +215,10 @@ mod tests {
                         events.push(event);
                         break;
                     }
+                    Event::TransferAborted { .. } => {
+                        events.push(event);
+                        break;
+                    }
                     _ => events.push(event),
                 }
             }
