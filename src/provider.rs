@@ -22,7 +22,7 @@ use anyhow::{bail, ensure, Context, Result};
 use bytes::{Bytes, BytesMut};
 use futures::future;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::io::SyncIoBridge;
@@ -338,6 +338,98 @@ async fn handle_connection(
     .await
 }
 
+async fn handshake<R: AsyncRead + Unpin>(
+    mut reader: R,
+    buffer: &mut BytesMut,
+    token: AuthToken,
+) -> Result<()> {
+    if let Some((handshake, size)) = read_lp::<_, Handshake>(&mut reader, buffer).await? {
+        ensure!(
+            handshake.version == VERSION,
+            "expected version {} but got {}",
+            VERSION,
+            handshake.version
+        );
+        ensure!(handshake.token == token, "AuthToken mismatch");
+        let _ = buffer.split_to(size);
+    } else {
+        bail!("no valid handshake received");
+    }
+    Ok(())
+}
+
+async fn decode_request(mut reader: quinn::RecvStream, buffer: &mut BytesMut) -> Result<Request> {
+    let request = read_lp::<_, Request>(&mut reader, buffer).await?;
+    ensure!(
+        reader.read_chunk(8, false).await?.is_none(),
+        "Extra data past request"
+    );
+    if let Some((request, _size)) = request {
+        Ok(request)
+    } else {
+        bail!("No request received");
+    }
+}
+
+async fn transfer_collection(
+    db: Database,
+    mut writer: quinn::SendStream,
+    buffer: &mut BytesMut,
+    request_id: u64,
+    outboard: &Bytes,
+    data: &Bytes,
+) -> Result<()> {
+    // We only respond to requests for collections, not individual blobs
+    let mut extractor = SliceExtractor::new_outboard(
+        std::io::Cursor::new(&data[..]),
+        std::io::Cursor::new(&outboard[..]),
+        0,
+        data.len() as u64,
+    );
+    let encoded_size: usize = abao::encode::encoded_size(data.len() as u64)
+        .try_into()
+        .unwrap();
+    let mut encoded = Vec::with_capacity(encoded_size);
+    extractor.read_to_end(&mut encoded)?;
+
+    let c: Collection = postcard::from_bytes(data)?;
+
+    // TODO: we should check if the blobs referenced in this container
+    // actually exist in this provider before returning `FoundCollection`
+    write_response(
+        &mut writer,
+        buffer,
+        request_id,
+        Res::FoundCollection {
+            total_blobs_size: c.total_blobs_size,
+        },
+    )
+    .await?;
+
+    let mut data = BytesMut::from(&encoded[..]);
+    writer.write_buf(&mut data).await?;
+    for (i, blob) in c.blobs.iter().enumerate() {
+        debug!("writing blob {}/{}", i, c.blobs.len());
+        let (status, writer1) =
+            send_blob(db.clone(), blob.hash, writer, buffer, request_id).await?;
+        writer = writer1;
+        if SentStatus::NotFound == status {
+            break;
+        }
+    }
+
+    writer.finish().await?;
+    debug!("finished response");
+    Ok(())
+}
+
+fn notify_transfer_aborted(events: broadcast::Sender<Event>, connection_id: u64, request_id: u64) {
+    let _ = events.send(Event::TransferAborted {
+        connection_id,
+        request_id,
+    });
+}
+
 async fn handle_stream(
     db: Database,
     token: AuthToken,
@@ -350,99 +442,62 @@ async fn handle_stream(
 
     // 1. Read Handshake
     debug!("reading handshake");
-    if let Some((handshake, size)) = read_lp::<_, Handshake>(&mut reader, &mut in_buffer).await? {
-        ensure!(
-            handshake.version == VERSION,
-            "expected version {} but got {}",
-            VERSION,
-            handshake.version
-        );
-        ensure!(handshake.token == token, "AuthToken mismatch");
-        let _ = in_buffer.split_to(size);
-    } else {
-        bail!("no valid handshake received");
+    if let Err(e) = handshake(&mut reader, &mut in_buffer, token).await {
+        notify_transfer_aborted(events, connection_id, 0);
+        return Err(e);
     }
 
     // 2. Decode the request.
     debug!("reading request");
-    let request = read_lp::<_, Request>(&mut reader, &mut in_buffer).await?;
-    ensure!(
-        reader.read_chunk(8, false).await?.is_none(),
-        "Extra data past request"
-    );
-    if let Some((request, _size)) = request {
-        let hash = request.name;
-        debug!("got request({})", request.id);
-        let _ = events.send(Event::RequestReceived {
-            connection_id,
-            request_id: request.id,
-            hash,
-        });
-
-        match db.get(&hash) {
-            // We only respond to requests for collections, not individual blobs
-            Some(BlobOrCollection::Collection((outboard, data))) => {
-                debug!("found collection {}", hash);
-
-                let mut extractor = SliceExtractor::new_outboard(
-                    std::io::Cursor::new(&data[..]),
-                    std::io::Cursor::new(&outboard[..]),
-                    0,
-                    data.len() as u64,
-                );
-                let encoded_size: usize = abao::encode::encoded_size(data.len() as u64)
-                    .try_into()
-                    .unwrap();
-                let mut encoded = Vec::with_capacity(encoded_size);
-                extractor.read_to_end(&mut encoded)?;
-
-                let c: Collection = postcard::from_bytes(data)?;
-
-                // TODO: we should check if the blobs referenced in this container
-                // actually exist in this provider before returning `FoundCollection`
-                write_response(
-                    &mut writer,
-                    &mut out_buffer,
-                    request.id,
-                    Res::FoundCollection {
-                        total_blobs_size: c.total_blobs_size,
-                    },
-                )
-                .await?;
-
-                let mut data = BytesMut::from(&encoded[..]);
-                writer.write_buf(&mut data).await?;
-                for (i, blob) in c.blobs.iter().enumerate() {
-                    debug!("writing blob {}/{}", i, c.blobs.len());
-                    let (status, writer1) =
-                        send_blob(db.clone(), blob.hash, writer, &mut out_buffer, request.id)
-                            .await?;
-                    writer = writer1;
-                    if SentStatus::NotFound == status {
-                        break;
-                    }
-                }
-
-                writer.finish().await?;
-                let _ = events.send(Event::TransferCompleted {
-                    connection_id,
-                    request_id: request.id,
-                });
-                debug!("finished response");
-            }
-            _ => {
-                debug!("not found {}", hash);
-                write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound).await?;
-                writer.finish().await?;
-                // TODO: If the connection drops mid-way we also need to emit this!
-                let _ = events.send(Event::TransferAborted {
-                    connection_id,
-                    request_id: request.id,
-                });
-            }
+    let request = match decode_request(reader, &mut in_buffer).await {
+        Ok(r) => r,
+        Err(e) => {
+            notify_transfer_aborted(events, connection_id, 0);
+            return Err(e);
         }
+    };
+
+    let hash = request.name;
+    debug!("got request({})", request.id);
+    let _ = events.send(Event::RequestReceived {
+        connection_id,
+        request_id: request.id,
+        hash,
+    });
+
+    // 4. Attempt to find hash
+    let (outboard, data) = match db.get(&hash) {
+        // We only respond to requests for collections, not individual blobs
+        Some(BlobOrCollection::Collection(d)) => d,
+        _ => {
+            debug!("not found {}", hash);
+            notify_transfer_aborted(events, connection_id, request.id);
+            write_response(&mut writer, &mut out_buffer, request.id, Res::NotFound).await?;
+            writer.finish().await?;
+
+            return Ok(());
+        }
+    };
+
+    // 5. Transfer data!
+    if let Err(e) = transfer_collection(
+        db.clone(),
+        writer,
+        &mut out_buffer,
+        request.id,
+        outboard,
+        data,
+    )
+    .await
+    {
+        notify_transfer_aborted(events, connection_id, request.id);
+        return Err(e);
     }
 
+    let _ = events.send(Event::TransferCompleted {
+        connection_id,
+        request_id: request.id,
+    });
     Ok(())
 }
 
