@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use anyhow::{bail, Result};
-use tempfile::tempdir;
+use testdir::testdir;
 
 const KEY_PATH: &str = "key";
 const TOKEN: &str = "uyfZLJHxXhyrL3T2FG7waiAh214H0fETxVqzAdYHGX0";
@@ -15,8 +15,8 @@ const FILE_HASH: &str = "bafkr4ict7dy3iohmc4xpupfxnoogwcfgily7vukhxuwooje6ph7h77
 
 #[test]
 fn cli_transfer_one_file() -> Result<()> {
-    let dir = tempdir()?;
-    let out = dir.path().join("out");
+    let dir = testdir!();
+    let out = dir.join("out");
 
     let res = CliTestRunner::new()
         .path(PathBuf::from("transfer").join("foo.bin"))
@@ -37,8 +37,8 @@ fn cli_transfer_one_file() -> Result<()> {
 
 #[test]
 fn cli_transfer_folder() -> Result<()> {
-    let dir = tempdir()?;
-    let out = dir.path().join("out");
+    let dir = testdir!();
+    let out = dir.join("out");
 
     let res = CliTestRunner::new()
         .port(43334)
